@@ -7,9 +7,9 @@ pub use connector::{connector_factory, EventSink, SinkReceiver, SinkSender};
 pub use config::{default_config_path, AppConfig, ConfigManager};
 pub use firebase::FirebaseConnector;
 pub use worker::RocketLeagueWorker;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
-#[derive(Default, Debug, Clone, Serialize)]
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct AppState {
     pub is_connected: bool,
     pub last_event: String,

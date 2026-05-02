@@ -32,6 +32,8 @@ pub struct AppConfig {
     #[serde(default)]
     pub connector: ConnectorConfig,
     pub reconnect_delay_seconds: u64,
+    #[serde(default = "default_ui_sync_port")]
+    pub ui_sync_port: u16,
 }
 
 impl Default for AppConfig {
@@ -41,8 +43,14 @@ impl Default for AppConfig {
             websocket_url: "ws://127.0.0.1:49123".to_string(),
             connector: ConnectorConfig::default(),
             reconnect_delay_seconds: 5,
+            ui_sync_port: default_ui_sync_port(),
         }
     }
+}
+
+#[must_use]
+pub const fn default_ui_sync_port() -> u16 {
+    54_321
 }
 
 #[derive(Debug, Clone)]
