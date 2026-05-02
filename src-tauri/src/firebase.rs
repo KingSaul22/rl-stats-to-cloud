@@ -28,12 +28,12 @@ impl FirebaseClient {
             FirebaseRoute::LiveState => "live_state".to_string(),
             FirebaseRoute::MatchEvent => {
                 let safe_event_type = sanitize_event_type(event_type);
-                format!("match_events/{}", safe_event_type)
+                format!("match_events/{safe_event_type}")
             }
         };
 
         let url = self.build_json_url(&endpoint);
-        let redacted_url = self.redact_url(&url);
+        let redacted_url = Self::redact_url(&url);
 
         let request = match route {
             FirebaseRoute::LiveState => self.http.put(&url),
@@ -54,9 +54,7 @@ impl FirebaseClient {
             Err(err) => {
                 let err_message = self.redact_message(&err.to_string());
                 eprintln!(
-                    "Firebase push warning: failed to send to {} ({})",
-                    redacted_url,
-                    err_message
+                    "Firebase push warning: failed to send to {redacted_url} ({err_message})"
                 );
             }
         }
@@ -71,8 +69,8 @@ impl FirebaseClient {
         url
     }
 
-    fn redact_url(&self, url: &str) -> String {
         if let Some(start) = url.find("auth=") {
+    fn redact_url(url: &str) -> String {
             let token_start = start + "auth=".len();
             let token_end = url[token_start..]
                 .find('&')
@@ -106,8 +104,8 @@ enum FirebaseRoute {
 impl FirebaseRoute {
     fn from_event_type(event_type: &str) -> Self {
         match event_type {
-            "UpdateState" | "ClockUpdatedSeconds" => FirebaseRoute::LiveState,
-            _ => FirebaseRoute::MatchEvent,
+            "UpdateState" | "ClockUpdatedSeconds" => Self::LiveState,
+            _ => Self::MatchEvent,
         }
     }
 }

@@ -33,16 +33,21 @@ fn greet(name: &str) -> String {
     format!("Hello, {name}! You've been greeted from Rust!")
 }
 
+/// Run the Tauri application with the provided configuration.
+/// This function initializes the application state, sets up the worker task, and handles graceful shutdown on exit events.
+/// 
+/// # Errors
+/// Returns a `tauri::Error` if the application fails to build or run.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run_tauri(config: AppConfig) -> Result<(), tauri::Error> {
     let shared_state: SharedAppState = Arc::new(Mutex::new(AppState::default()));
     let shared_config: SharedConfig = Arc::new(Mutex::new(config.clone()));
     let shutdown = CancellationToken::new();
     let is_shutting_down = Arc::new(AtomicBool::new(false));
-    let worker_task: WorkerTask = Arc::new(Mutex::new(None));
+    let worker_task: Arc<Mutex<Option<JoinHandle<()>>>> = Arc::new(Mutex::new(None));
 
     let setup_shutdown = shutdown.clone();
-    let setup_config = config.clone();
+    let setup_config = config;
     let setup_shared_state = Arc::clone(&shared_state);
     let setup_worker_task = Arc::clone(&worker_task);
 
@@ -83,7 +88,7 @@ pub fn run_tauri(config: AppConfig) -> Result<(), tauri::Error> {
         })
         .build(tauri::generate_context!())?;
 
-    let event_shutdown = shutdown.clone();
+    let event_shutdown = shutdown;
     let event_worker_task = Arc::clone(&worker_task);
     let event_is_shutting_down = Arc::clone(&is_shutting_down);
 

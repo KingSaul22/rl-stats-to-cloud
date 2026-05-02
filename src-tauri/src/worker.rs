@@ -56,7 +56,7 @@ impl RocketLeagueWorker {
             }
 
             let session_result = tokio::select! {
-                _ = shutdown.cancelled() => {
+                () = shutdown.cancelled() => {
                     self.log_shutdown_once(&mut shutdown_logged);
                     break;
                 }
@@ -86,11 +86,11 @@ impl RocketLeagueWorker {
             }
 
             tokio::select! {
-                _ = shutdown.cancelled() => {
+                () = shutdown.cancelled() => {
                     self.log_shutdown_once(&mut shutdown_logged);
                     break;
                 }
-                _ = sleep(self.reconnect_delay) => {}
+                () = sleep(self.reconnect_delay) => {}
             }
         }
     }
@@ -111,7 +111,7 @@ impl RocketLeagueWorker {
         match self.run_websocket_session(shutdown).await {
             Ok(()) => Ok(()),
             Err(err) => {
-                if self.should_fallback_to_tcp(&err) {
+                if Self::should_fallback_to_tcp(&err) {
                     eprintln!(
                         "Endpoint did not complete WebSocket handshake; falling back to raw TCP stream mode."
                     );
@@ -135,7 +135,7 @@ impl RocketLeagueWorker {
 
         loop {
             let next_message = tokio::select! {
-                _ = shutdown.cancelled() => {
+                () = shutdown.cancelled() => {
                     self.set_connected(false);
                     return Ok(());
                 }
@@ -146,13 +146,13 @@ impl RocketLeagueWorker {
                 return Ok(());
             };
 
-            let message = message_result.map_err(|err| format!("read error: {}", err))?;
+            let message = message_result.map_err(|err| format!("read error: {err}"))?;
 
             match message {
                 Message::Text(text) => self.handle_payload(&text),
                 Message::Binary(bytes) => match String::from_utf8(bytes.to_vec()) {
                     Ok(text) => self.handle_payload(&text),
-                    Err(err) => eprintln!("Skipping non-UTF8 binary frame: {}", err),
+                    Err(err) => eprintln!("Skipping non-UTF8 binary frame: {err}"),
                 },
                 Message::Close(frame) => {
                     self.set_connected(false);
@@ -177,22 +177,22 @@ impl RocketLeagueWorker {
 
         let mut stream = TcpStream::connect(&address)
             .await
-            .map_err(|err| format!("could not connect to {} ({})", address, err))?;
+            .map_err(|err| format!("could not connect to {address} ({err})"))?;
 
         self.set_connected(true);
-        println!("Connected (TCP stream) to {}", address);
+        println!("Connected (TCP stream) to {address}");
 
         let mut read_buffer = [0_u8; 4096];
         let mut pending = String::new();
 
         loop {
             let read = tokio::select! {
-                _ = shutdown.cancelled() => {
+                () = shutdown.cancelled() => {
                     self.set_connected(false);
                     return Ok(());
                 }
                 read_result = stream.read(&mut read_buffer) => {
-                    read_result.map_err(|err| format!("tcp read error: {}", err))?
+                    read_result.map_err(|err| format!("tcp read error: {err}"))?
                 }
             };
 
@@ -212,7 +212,7 @@ impl RocketLeagueWorker {
         }
     }
 
-    fn should_fallback_to_tcp(&self, error_message: &str) -> bool {
+    fn should_fallback_to_tcp(error_message: &str) -> bool {
         let lower = error_message.to_ascii_lowercase();
         lower.contains("httparse")
             || lower.contains("invalid http")
@@ -232,7 +232,7 @@ impl RocketLeagueWorker {
 
             let port = port_str
                 .parse::<u16>()
-                .map_err(|err| format!("invalid tcp port: {}", err))?;
+                .map_err(|err| format!("invalid tcp port: {err}"))?;
 
             return Ok((host, port));
         }
@@ -271,7 +271,7 @@ impl RocketLeagueWorker {
                         break;
                     }
 
-                    eprintln!("Skipping malformed streamed JSON segment: {}", err);
+                    eprintln!("Skipping malformed streamed JSON segment: {err}");
                     let consumed = stream.byte_offset().saturating_add(1);
                     if consumed > 0 && consumed <= pending.len() {
                         pending.drain(..consumed);
@@ -289,7 +289,7 @@ impl RocketLeagueWorker {
         let parsed: Value = match serde_json::from_str(payload) {
             Ok(value) => value,
             Err(err) => {
-                eprintln!("Skipping invalid JSON payload: {}", err);
+                eprintln!("Skipping invalid JSON payload: {err}");
                 return;
             }
         };
@@ -350,7 +350,7 @@ impl RocketLeagueWorker {
     fn emit_status_update(&self, state: &AppState) {
         if let Some(app_handle) = &self.app_handle
             && let Err(err) = app_handle.emit("status-update", state) {
-                eprintln!("failed to emit status-update event: {}", err);
+                eprintln!("failed to emit status-update event: {err}");
             }
     }
 }

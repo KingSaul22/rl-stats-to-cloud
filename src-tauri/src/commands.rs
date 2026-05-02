@@ -24,7 +24,7 @@ pub fn save_config(
 ) -> Result<(), String> {
     config_manager
         .save(&new_config)
-        .map_err(|err| format!("failed to save config: {}", err))?;
+        .map_err(|err| format!("failed to save config: {err}"))?;
 
     let mut guard = config
         .lock()

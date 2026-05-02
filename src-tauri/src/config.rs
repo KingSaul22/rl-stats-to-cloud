@@ -34,18 +34,25 @@ pub struct ConfigManager {
 }
 
 impl ConfigManager {
-    pub fn new(path: PathBuf) -> Self {
+    #[must_use]
+    pub const fn new(path: PathBuf) -> Self {
         Self { path }
     }
 
+    #[must_use]
     pub fn local() -> Self {
         Self::new(default_config_path())
     }
 
+    #[must_use]
     pub fn path(&self) -> &Path {
         &self.path
     }
 
+    /// Loads the configuration from the file if it exists, otherwise creates a new file with default settings and returns that.
+    /// 
+    /// # Errors
+    /// Returns an error if reading from or writing to the file fails, or if the file contents cannot be parsed as JSON.
     pub fn load_or_create(&self) -> ConfigResult<AppConfig> {
         if self.path.exists() {
             return self.load();
@@ -56,12 +63,20 @@ impl ConfigManager {
         Ok(config)
     }
 
+    /// Loads the configuration from the file.
+    /// 
+    /// # Errors
+    /// Returns an error if reading from the file fails or if the file contents cannot be parsed as JSON.
     pub fn load(&self) -> ConfigResult<AppConfig> {
         let content = fs::read_to_string(&self.path)?;
         let config: AppConfig = serde_json::from_str(&content)?;
         Ok(config)
     }
 
+    /// Saves the provided configuration to the file, creating any necessary parent directories.
+    /// 
+    /// # Errors
+    /// Returns an error if creating parent directories fails, if serializing the configuration to JSON fails, or if writing to the file fails.
     pub fn save(&self, config: &AppConfig) -> ConfigResult<()> {
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent)?;
@@ -73,6 +88,7 @@ impl ConfigManager {
     }
 }
 
+#[must_use]
 pub fn default_config_path() -> PathBuf {
     #[cfg(target_os = "windows")]
     {
