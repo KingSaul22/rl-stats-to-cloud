@@ -144,3 +144,47 @@ pub fn default_config_path() -> PathBuf {
         .unwrap_or_else(|_| PathBuf::from("."))
         .join(CONFIG_FILE_NAME)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{default_ui_sync_port, AppConfig};
+
+    #[test]
+    fn app_config_deserializes_without_ui_sync_port() {
+        let legacy_json = r#"{
+            "is_headless": false,
+            "websocket_url": "ws://127.0.0.1:49123",
+            "connector": {
+                "type": "Firebase",
+                "url": "https://your-project.firebaseio.com",
+                "auth_token": null
+            },
+            "reconnect_delay_seconds": 5
+        }"#;
+
+        let config: AppConfig = serde_json::from_str(legacy_json)
+            .expect("Legacy config should deserialize with default ui_sync_port");
+
+        assert_eq!(config.ui_sync_port, default_ui_sync_port());
+    }
+
+    #[test]
+    fn app_config_deserializes_with_explicit_ui_sync_port() {
+        let json = r#"{
+            "is_headless": false,
+            "websocket_url": "ws://127.0.0.1:49123",
+            "connector": {
+                "type": "Firebase",
+                "url": "https://your-project.firebaseio.com",
+                "auth_token": null
+            },
+            "reconnect_delay_seconds": 5,
+            "ui_sync_port": 60000
+        }"#;
+
+        let config: AppConfig =
+            serde_json::from_str(json).expect("Config with ui_sync_port should deserialize");
+
+        assert_eq!(config.ui_sync_port, 60000);
+    }
+}
