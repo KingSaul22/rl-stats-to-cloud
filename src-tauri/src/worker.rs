@@ -173,7 +173,7 @@ impl RocketLeagueWorker {
 
     async fn run_raw_tcp_session(&self, shutdown: &CancellationToken) -> Result<(), String> {
         let (host, port) = self.resolve_tcp_target()?;
-        let address = format!("{}:{}", host, port);
+        let address = format!("{host}:{port}");
 
         let mut stream = TcpStream::connect(&address)
             .await

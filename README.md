@@ -16,3 +16,12 @@ For headless execution:
 ```
 cargo run --manifest-path src-tauri/Cargo.toml -- --headless
 ```
+
+
+```
+cargo clippy --all-targets --all-features -- -D warnings -D clippy::all -D clippy::pedantic -D clippy::nursery
+```
+
+```
+cargo outdated && cargo upgrade && cargo update && cargo check
+```

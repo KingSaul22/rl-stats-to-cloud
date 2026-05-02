@@ -28,7 +28,7 @@ fn main() {
     if config.is_headless {
         run_headless(config);
     } else if let Err(err) = rl_stats_to_cloud_lib::run_tauri(config) {
-        eprintln!("Tauri app terminated with error: {}", err);
+        eprintln!("Tauri app terminated with error: {err}");
     }
 }
 
@@ -41,7 +41,7 @@ fn run_headless(config: rl_stats_to_cloud_lib::AppConfig) {
     {
         Ok(runtime) => runtime,
         Err(err) => {
-            eprintln!("Failed to initialize tokio runtime: {}", err);
+            eprintln!("Failed to initialize tokio runtime: {err}");
             return;
         }
     };
@@ -62,13 +62,13 @@ fn run_headless(config: rl_stats_to_cloud_lib::AppConfig) {
                 shutdown.cancel();
             }
             Err(err) => {
-                eprintln!("Failed to listen for Ctrl+C: {}", err);
+                eprintln!("Failed to listen for Ctrl+C: {err}");
                 shutdown.cancel();
             }
         }
 
         if let Err(err) = worker_task.await {
-            eprintln!("Worker task join error: {}", err);
+            eprintln!("Worker task join error: {err}");
         }
     });
 }

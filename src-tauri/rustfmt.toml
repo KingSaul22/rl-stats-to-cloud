@@ -1,0 +1,4 @@
+max_width = 100
+fn_call_width = 60
+format_strings = true
+reorder_imports = true
