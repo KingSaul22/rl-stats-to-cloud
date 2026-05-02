@@ -1,5 +1,5 @@
 use crate::config::AppConfig;
-use crate::firebase::FirebaseClient;
+use crate::SinkReceiver;
 use crate::StateSender;
 use futures_util::StreamExt;
 use serde_json::Value;
@@ -18,7 +18,7 @@ type TcpTarget = (String, u16);
 pub struct RocketLeagueWorker {
     websocket_url: String,
     reconnect_delay: Duration,
-    firebase_client: FirebaseClient,
+    sink_receiver: SinkReceiver,
     state_sender: StateSender,
 }
 
@@ -27,14 +27,12 @@ impl RocketLeagueWorker {
     pub fn from_config(
         config: &AppConfig,
         state_sender: StateSender,
+        sink_receiver: SinkReceiver,
     ) -> Self {
         Self {
             websocket_url: config.websocket_url.clone(),
             reconnect_delay: Duration::from_secs(config.reconnect_delay_seconds),
-            firebase_client: FirebaseClient::new(
-                config.firebase_url.clone(),
-                config.firebase_auth_token.clone(),
-            ),
+            sink_receiver,
             state_sender,
         }
     }
@@ -298,12 +296,12 @@ impl RocketLeagueWorker {
         match parsed.get("Event").and_then(Value::as_str) {
             Some(event_name) => {
                 self.set_last_event(event_name);
-                let firebase_client = self.firebase_client.clone();
+                let sink = self.sink_receiver.borrow().clone();
                 let event_type = event_name.to_string();
                 let payload = parsed;
 
                 tokio::spawn(async move {
-                    firebase_client.push_event(&event_type, &payload).await;
+                    sink.send_event(&event_type, &payload).await;
                 });
             }
             None => println!("Received JSON without Event field."),

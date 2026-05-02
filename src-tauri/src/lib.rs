@@ -1,10 +1,12 @@
 pub mod commands;
+pub mod connector;
 pub mod config;
 pub mod firebase;
 pub mod worker;
 
+pub use connector::{connector_factory, EventSink, SinkReceiver, SinkSender};
 pub use config::{default_config_path, AppConfig, ConfigManager};
-pub use firebase::FirebaseClient;
+pub use firebase::FirebaseConnector;
 pub use worker::RocketLeagueWorker;
 use serde::Serialize;
 use std::fs;
@@ -47,6 +49,8 @@ fn greet(name: &str) -> String {
 pub fn run_tauri(config: AppConfig) -> Result<(), tauri::Error> {
     let (state_sender, state_receiver): (StateSender, StateReceiver) =
         watch::channel(AppState::default());
+    let initial_sink = connector_factory(&config.connector);
+    let (sink_sender, sink_receiver): (SinkSender, SinkReceiver) = watch::channel(initial_sink);
     let shared_config: SharedConfig = Arc::new(Mutex::new(config.clone()));
     let shutdown = CancellationToken::new();
     let is_shutting_down = Arc::new(AtomicBool::new(false));
@@ -55,12 +59,14 @@ pub fn run_tauri(config: AppConfig) -> Result<(), tauri::Error> {
     let setup_shutdown = shutdown.clone();
     let setup_config = config;
     let setup_state_sender = state_sender;
+    let setup_sink_receiver = sink_receiver.clone();
     let setup_state_receiver = state_receiver.clone();
     let setup_worker_task = Arc::clone(&worker_task);
 
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(state_receiver)
+        .manage(sink_sender)
         .manage(Arc::clone(&shared_config))
         .invoke_handler(tauri::generate_handler![
             greet,
@@ -91,6 +97,7 @@ pub fn run_tauri(config: AppConfig) -> Result<(), tauri::Error> {
             let worker = RocketLeagueWorker::from_config(
                 &setup_config,
                 setup_state_sender.clone(),
+                setup_sink_receiver.clone(),
             );
             let worker_shutdown = setup_shutdown.clone();
             let handle = tauri::async_runtime::spawn(async move {

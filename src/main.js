@@ -10,8 +10,9 @@ const lastEventEl = document.querySelector("#last-event");
 const formEl = document.querySelector("#config-form");
 const saveButtonEl = document.querySelector("#save-config");
 const saveStatusEl = document.querySelector("#save-status");
-const firebaseUrlEl = document.querySelector("#firebase-url");
-const firebaseAuthTokenEl = document.querySelector("#firebase-auth-token");
+const connectorTypeEl = document.querySelector("#connector-type");
+const connectorUrlEl = document.querySelector("#connector-url");
+const connectorAuthTokenEl = document.querySelector("#connector-auth-token");
 const reconnectDelayEl = document.querySelector("#reconnect-delay-seconds");
 
 function readConfigField(config, snakeCase, camelCase = "") {
@@ -84,16 +85,22 @@ function showSaveMessage(message, isSuccess = true) {
 async function loadInitialConfig() {
   const config = await invoke("get_config");
   currentConfig = typeof config === "object" && config !== null ? config : {};
+  const connector =
+    typeof currentConfig.connector === "object" && currentConfig.connector !== null
+      ? currentConfig.connector
+      : {};
 
-  if (firebaseUrlEl) {
-    firebaseUrlEl.value = String(
-      readConfigField(currentConfig, "firebase_url", "firebaseUrl")
-    );
+  if (connectorTypeEl) {
+    connectorTypeEl.value = String(readConfigField(connector, "type", "type") || "Firebase");
   }
 
-  if (firebaseAuthTokenEl) {
-    firebaseAuthTokenEl.value = String(
-      readConfigField(currentConfig, "firebase_auth_token", "firebaseAuthToken")
+  if (connectorUrlEl) {
+    connectorUrlEl.value = String(readConfigField(connector, "url", "url"));
+  }
+
+  if (connectorAuthTokenEl) {
+    connectorAuthTokenEl.value = String(
+      readConfigField(connector, "auth_token", "authToken")
     );
   }
 
@@ -122,7 +129,13 @@ async function loadInitialStatus() {
 async function saveConfiguration(event) {
   event.preventDefault();
 
-  if (!firebaseUrlEl || !firebaseAuthTokenEl || !reconnectDelayEl || !saveButtonEl) {
+  if (
+    !connectorTypeEl ||
+    !connectorUrlEl ||
+    !connectorAuthTokenEl ||
+    !reconnectDelayEl ||
+    !saveButtonEl
+  ) {
     return;
   }
 
@@ -138,8 +151,11 @@ async function saveConfiguration(event) {
 
   const newConfig = {
     ...currentConfig,
-    firebase_url: firebaseUrlEl.value.trim(),
-    firebase_auth_token: firebaseAuthTokenEl.value,
+    connector: {
+      type: connectorTypeEl.value || "Firebase",
+      url: connectorUrlEl.value.trim(),
+      auth_token: connectorAuthTokenEl.value || null,
+    },
     reconnect_delay_seconds: safeReconnectDelay,
   };
 

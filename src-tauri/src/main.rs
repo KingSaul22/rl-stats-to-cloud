@@ -1,7 +1,9 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use rl_stats_to_cloud_lib::{default_config_path, ConfigManager, RocketLeagueWorker};
+use rl_stats_to_cloud_lib::{
+    connector_factory, default_config_path, ConfigManager, RocketLeagueWorker,
+};
 use tokio_util::sync::CancellationToken;
 
 fn main() {
@@ -48,7 +50,9 @@ fn run_headless(config: rl_stats_to_cloud_lib::AppConfig) {
     runtime.block_on(async move {
         let (state_sender, _state_receiver) =
             tokio::sync::watch::channel(rl_stats_to_cloud_lib::AppState::default());
-        let worker = RocketLeagueWorker::from_config(&config, state_sender);
+        let initial_sink = connector_factory(&config.connector);
+        let (_sink_sender, sink_receiver) = tokio::sync::watch::channel(initial_sink);
+        let worker = RocketLeagueWorker::from_config(&config, state_sender, sink_receiver);
         let shutdown = CancellationToken::new();
         let worker_shutdown = shutdown.clone();
 

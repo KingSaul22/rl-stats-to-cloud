@@ -1,14 +1,16 @@
+use crate::connector::EventSink;
+use async_trait::async_trait;
 use reqwest::Client;
 use serde_json::Value;
 
 #[derive(Clone)]
-pub struct FirebaseClient {
+pub struct FirebaseConnector {
     base_url: String,
     auth_token: Option<String>,
     http: Client,
 }
 
-impl FirebaseClient {
+impl FirebaseConnector {
     pub fn new(firebase_url: impl Into<String>, firebase_auth_token: Option<String>) -> Self {
         let base_url = firebase_url.into().trim_end_matches('/').to_string();
         let auth_token = firebase_auth_token
@@ -22,7 +24,7 @@ impl FirebaseClient {
         }
     }
 
-    pub async fn push_event(&self, event_type: &str, payload: &Value) {
+    async fn push_event(&self, event_type: &str, payload: &Value) {
         let route = FirebaseRoute::from_event_type(event_type);
         let endpoint = match route {
             FirebaseRoute::LiveState => "live_state".to_string(),
@@ -89,6 +91,13 @@ impl FirebaseClient {
         }
 
         output
+    }
+}
+
+#[async_trait]
+impl EventSink for FirebaseConnector {
+    async fn send_event(&self, event_type: &str, payload: &Value) {
+        self.push_event(event_type, payload).await;
     }
 }
 

@@ -31,21 +31,26 @@
       <section class="panel" aria-labelledby="config-title">
         <h2 id="config-title">Configuration</h2>
         <form id="config-form" class="config-form" autocomplete="off">
-          <label for="firebase-url">Firebase URL</label>
+          <label for="connector-type">Connector Type</label>
+          <select id="connector-type" name="connector_type" required>
+            <option value="Firebase">Firebase RTDB</option>
+          </select>
+
+          <label for="connector-url">Database URL</label>
           <input
-            id="firebase-url"
-            name="firebase_url"
+            id="connector-url"
+            name="connector_url"
             type="text"
             placeholder="https://your-project.firebaseio.com"
             required
           />
 
-          <label for="firebase-auth-token">Firebase Auth Token</label>
+          <label for="connector-auth-token">Auth Token</label>
           <input
-            id="firebase-auth-token"
-            name="firebase_auth_token"
+            id="connector-auth-token"
+            name="connector_auth_token"
             type="password"
-            placeholder="Enter Firebase auth token"
+            placeholder="Enter auth token"
           />
 
           <label for="reconnect-delay-seconds">Reconnect Delay (seconds)</label>

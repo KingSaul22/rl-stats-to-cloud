@@ -8,11 +8,29 @@ const APP_CONFIG_DIR_NAME: &str = "com.kingsaul22.rlstatscloud.app";
 const CONFIG_FILE_NAME: &str = "config.json";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum ConnectorConfig {
+    Firebase {
+        url: String,
+        auth_token: Option<String>,
+    },
+}
+
+impl Default for ConnectorConfig {
+    fn default() -> Self {
+        Self::Firebase {
+            url: "https://your-project.firebaseio.com".to_string(),
+            auth_token: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     pub is_headless: bool,
     pub websocket_url: String,
-    pub firebase_url: String,
-    pub firebase_auth_token: Option<String>,
+    #[serde(default)]
+    pub connector: ConnectorConfig,
     pub reconnect_delay_seconds: u64,
 }
 
@@ -21,8 +39,7 @@ impl Default for AppConfig {
         Self {
             is_headless: false,
             websocket_url: "ws://127.0.0.1:49123".to_string(),
-            firebase_url: "https://your-project.firebaseio.com".to_string(),
-            firebase_auth_token: None,
+            connector: ConnectorConfig::default(),
             reconnect_delay_seconds: 5,
         }
     }

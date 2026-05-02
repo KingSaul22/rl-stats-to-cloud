@@ -1,4 +1,7 @@
-use crate::{AppConfig, AppState, SharedConfig, SharedConfigManager, StateReceiver};
+use crate::{
+    connector_factory, AppConfig, AppState, SharedConfig, SharedConfigManager, SinkSender,
+    StateReceiver,
+};
 
 /// Get the current application configuration.
 /// 
@@ -23,6 +26,7 @@ pub fn save_config(
     new_config: AppConfig,
     config: tauri::State<'_, SharedConfig>,
     config_manager: tauri::State<'_, SharedConfigManager>,
+    sink_sender: tauri::State<'_, SinkSender>,
 ) -> Result<(), String> {
     config_manager
         .save(&new_config)
@@ -32,7 +36,10 @@ pub fn save_config(
         .lock()
         .map_err(|_| "failed to acquire config lock".to_string())?;
     *guard = new_config;
+
+    let sink = connector_factory(&guard.connector);
     drop(guard);
+    let _ = sink_sender.send(sink);
 
     Ok(())
 }
