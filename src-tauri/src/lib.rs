@@ -19,6 +19,8 @@ use tokio_util::sync::CancellationToken;
 
 pub type SharedConfig = Arc<Mutex<AppConfig>>;
 pub type SharedConfigManager = Arc<ConfigManager>;
+pub type WorkerTaskHandle = JoinHandle<()>;
+pub type SharedWorkerTask = Arc<Mutex<Option<WorkerTaskHandle>>>;
 
 #[derive(Default, Debug, Clone, Serialize)]
 pub struct AppState {
@@ -48,7 +50,7 @@ pub fn run_tauri(config: AppConfig) -> Result<(), tauri::Error> {
     let shared_config: SharedConfig = Arc::new(Mutex::new(config.clone()));
     let shutdown = CancellationToken::new();
     let is_shutting_down = Arc::new(AtomicBool::new(false));
-    let worker_task: Arc<Mutex<Option<JoinHandle<()>>>> = Arc::new(Mutex::new(None));
+    let worker_task: SharedWorkerTask = Arc::new(Mutex::new(None));
 
     let setup_shutdown = shutdown.clone();
     let setup_config = config;

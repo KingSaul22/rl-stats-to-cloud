@@ -5,6 +5,7 @@ use crate::{AppConfig, AppState, SharedConfig, SharedConfigManager, StateReceive
 /// # Errors
 /// Returns an error if the configuration lock cannot be acquired.
 #[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
 pub fn get_config(config: tauri::State<'_, SharedConfig>) -> Result<AppConfig, String> {
     let guard = config
         .lock()
@@ -17,6 +18,7 @@ pub fn get_config(config: tauri::State<'_, SharedConfig>) -> Result<AppConfig, S
 /// # Errors
 /// Returns an error if the configuration lock cannot be acquired or if saving the configuration fails.
 #[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
 pub fn save_config(
     new_config: AppConfig,
     config: tauri::State<'_, SharedConfig>,
@@ -37,6 +39,7 @@ pub fn save_config(
 
 #[tauri::command]
 #[must_use]
+#[allow(clippy::needless_pass_by_value)]
 pub fn get_status(state: tauri::State<'_, StateReceiver>) -> AppState {
     state.borrow().clone()
 }
