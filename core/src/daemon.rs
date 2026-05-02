@@ -6,7 +6,10 @@ use interprocess::local_socket::{
 use rl_stats_core::{connector_factory, AppConfig, AppState, RocketLeagueWorker, StateReceiver};
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader, ErrorKind, Write};
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicU64, AtomicUsize, Ordering},
+    Arc,
+};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::task::JoinHandle;
@@ -16,6 +19,7 @@ use tokio_util::sync::CancellationToken;
 const CONTROL_SOCKET_BASENAME: &str = "rl_stats_control.sock";
 #[cfg(unix)]
 const CONTROL_SOCKET_FALLBACK_PATH: &str = "/tmp/rl_stats_control.sock";
+const UI_IDLE_AUTO_DISALLOW_SECONDS: u64 = 30;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -329,8 +333,15 @@ async fn dispatch_control_command(
             let state_receiver = guard.state_receiver.clone();
             let ui_shutdown = CancellationToken::new();
             let task_shutdown = ui_shutdown.clone();
+            let task_ui_control = Arc::clone(ui_control);
             let task = tokio::spawn(async move {
-                run_ui_websocket_server(bind_addr, state_receiver, task_shutdown).await;
+                run_ui_websocket_server(
+                    bind_addr,
+                    state_receiver,
+                    task_shutdown,
+                    task_ui_control,
+                )
+                .await;
             });
             guard.server_task = Some(UiServerTask {
                 shutdown: ui_shutdown,
@@ -391,6 +402,7 @@ async fn run_ui_websocket_server(
     bind_addr: String,
     state_receiver: StateReceiver,
     shutdown: CancellationToken,
+    ui_control: Arc<AsyncMutex<UiServerControl>>,
 ) {
     let listener = match TcpListener::bind(&bind_addr).await {
         Ok(listener) => listener,
@@ -401,6 +413,8 @@ async fn run_ui_websocket_server(
     };
 
     println!("UI websocket server listening at ws://{bind_addr}");
+    let active_clients = Arc::new(AtomicUsize::new(0));
+    let lifecycle_generation = Arc::new(AtomicU64::new(0));
 
     loop {
         tokio::select! {
@@ -413,8 +427,19 @@ async fn run_ui_websocket_server(
                     Ok((stream, _addr)) => {
                         let client_shutdown = shutdown.clone();
                         let client_state_receiver = state_receiver.clone();
+                        let client_active_clients = Arc::clone(&active_clients);
+                        let client_lifecycle_generation = Arc::clone(&lifecycle_generation);
+                        let client_ui_control = Arc::clone(&ui_control);
                         tokio::spawn(async move {
-                            serve_ui_client(stream, client_state_receiver, client_shutdown).await;
+                            serve_ui_client(
+                                stream,
+                                client_state_receiver,
+                                client_shutdown,
+                                client_active_clients,
+                                client_lifecycle_generation,
+                                client_ui_control,
+                            )
+                            .await;
                         });
                     }
                     Err(err) => {
@@ -432,6 +457,9 @@ async fn serve_ui_client(
     stream: TcpStream,
     state_receiver: StateReceiver,
     shutdown: CancellationToken,
+    active_clients: Arc<AtomicUsize>,
+    lifecycle_generation: Arc<AtomicU64>,
+    ui_control: Arc<AsyncMutex<UiServerControl>>,
 ) {
     let ws_stream = match accept_async(stream).await {
         Ok(ws_stream) => ws_stream,
@@ -441,8 +469,34 @@ async fn serve_ui_client(
         }
     };
 
+    active_clients.fetch_add(1, Ordering::SeqCst);
+    let _ = lifecycle_generation.fetch_add(1, Ordering::SeqCst);
+
     if let Err(err) = stream_state_to_client(ws_stream, state_receiver, shutdown).await {
         eprintln!("UI websocket client stream ended with error: {err}");
+    }
+
+    let previous = active_clients.fetch_sub(1, Ordering::SeqCst);
+    if previous == 1 {
+        let generation_at_disconnect = lifecycle_generation.fetch_add(1, Ordering::SeqCst) + 1;
+        tokio::spawn(async move {
+            tokio::time::sleep(tokio::time::Duration::from_secs(
+                UI_IDLE_AUTO_DISALLOW_SECONDS,
+            ))
+            .await;
+
+            let still_idle = active_clients.load(Ordering::SeqCst) == 0;
+            let same_generation =
+                lifecycle_generation.load(Ordering::SeqCst) == generation_at_disconnect;
+
+            if still_idle && same_generation {
+                println!(
+                    "No UI clients reconnected within {}s. Auto-disallowing UI server.",
+                    UI_IDLE_AUTO_DISALLOW_SECONDS
+                );
+                let _ = stop_ui_server(&ui_control).await;
+            }
+        });
     }
 }
 

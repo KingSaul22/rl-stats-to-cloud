@@ -30,6 +30,7 @@ const CONTROL_SOCKET_FALLBACK_PATH: &str = "/tmp/rl_stats_control.sock";
 #[serde(rename_all = "kebab-case")]
 enum ControlCommand {
     AllowUi,
+    DisallowUi,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -136,9 +137,27 @@ pub fn run_tauri(config: AppConfig) -> Result<(), tauri::Error> {
                     });
                 }
 
+            let disallow_reply = send_control_command(ControlCommand::DisallowUi);
+            match disallow_reply {
+                ControlReply::Ok { message } => {
+                    println!("DisallowUi command acknowledged on UI shutdown: {message}");
+                }
+                ControlReply::NotRunning { message } => {
+                    eprintln!("DisallowUi on shutdown: daemon not running: {message}");
+                }
+                ControlReply::Error { message } => {
+                    eprintln!("DisallowUi on shutdown error: {message}");
+                }
+            }
+
             app_handle.exit(0);
         }
         tauri::RunEvent::Exit => {
+            let already_shutting_down = event_is_shutting_down.swap(true, Ordering::SeqCst);
+            if already_shutting_down {
+                return;
+            }
+
             event_shutdown.cancel();
 
             if let Ok(mut guard) = event_bridge_task.lock()
@@ -147,6 +166,19 @@ pub fn run_tauri(config: AppConfig) -> Result<(), tauri::Error> {
                         let _ = handle.await;
                     });
                 }
+
+            let disallow_reply = send_control_command(ControlCommand::DisallowUi);
+            match disallow_reply {
+                ControlReply::Ok { message } => {
+                    println!("DisallowUi command acknowledged on UI exit: {message}");
+                }
+                ControlReply::NotRunning { message } => {
+                    eprintln!("DisallowUi on exit: daemon not running: {message}");
+                }
+                ControlReply::Error { message } => {
+                    eprintln!("DisallowUi on exit error: {message}");
+                }
+            }
         }
         _ => {}
     });
