@@ -199,7 +199,7 @@ async fn run_state_bridge_loop(
 
                 loop {
                     tokio::select! {
-                        _ = shutdown.cancelled() => {
+                        () = shutdown.cancelled() => {
                             return;
                         }
                         next_message = ws_stream.next() => {

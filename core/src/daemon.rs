@@ -195,8 +195,7 @@ fn claim_daemon_ownership() -> Result<DaemonOwnership, String> {
         })
         .map_err(|err| {
             format!(
-                "Another daemon instance appears to be running (failed to bind control endpoint {}): {}",
-                endpoint_display, err
+                "Another daemon instance appears to be running (failed to bind control endpoint {endpoint_display}): {err}"
             )
         })
 }
@@ -234,7 +233,7 @@ impl DaemonSupervisor {
                 }
                 shutdown.cancel();
             }
-            _ = shutdown.cancelled() => {
+            () = shutdown.cancelled() => {
                 println!("Shutdown requested. Stopping daemon supervisor...");
             }
         }
@@ -347,6 +346,7 @@ async fn dispatch_control_command(
                 shutdown: ui_shutdown,
                 task,
             });
+            drop(guard);
 
             println!("AllowUi command received. UI websocket server started.");
             ControlReply::Ok {
@@ -418,7 +418,7 @@ async fn run_ui_websocket_server(
 
     loop {
         tokio::select! {
-            _ = shutdown.cancelled() => {
+            () = shutdown.cancelled() => {
                 println!("UI websocket server shutdown requested.");
                 break;
             }
@@ -491,8 +491,7 @@ async fn serve_ui_client(
 
             if still_idle && same_generation {
                 println!(
-                    "No UI clients reconnected within {}s. Auto-disallowing UI server.",
-                    UI_IDLE_AUTO_DISALLOW_SECONDS
+                    "No UI clients reconnected within {UI_IDLE_AUTO_DISALLOW_SECONDS}s. Auto-disallowing UI server."
                 );
                 let _ = stop_ui_server(&ui_control).await;
             }
@@ -510,7 +509,7 @@ async fn stream_state_to_client(
 
     loop {
         tokio::select! {
-            _ = shutdown.cancelled() => {
+            () = shutdown.cancelled() => {
                 return Ok(());
             }
             changed = state_receiver.changed() => {
@@ -532,7 +531,7 @@ async fn send_app_state(
         .map_err(|err| format!("Failed to serialize AppState for websocket: {err}"))?;
 
     ws_stream
-        .send(Message::Text(payload.into()))
+        .send(Message::Text(payload))
         .await
         .map_err(|err| format!("Failed to send websocket state update: {err}"))
 }
@@ -586,15 +585,15 @@ fn control_endpoint_display() -> String {
 #[cfg(test)]
 mod tests {
     use super::ControlCommand;
+    use serde_json::Error as JsonError;
 
     #[test]
-    fn control_command_json_roundtrip() {
-        let value = serde_json::to_string(&ControlCommand::AllowUi)
-            .expect("ControlCommand should serialize");
+    fn control_command_json_roundtrip() -> Result<(), JsonError> {
+        let value = serde_json::to_string(&ControlCommand::AllowUi)?;
         assert_eq!(value, "\"allow-ui\"");
 
-        let parsed: ControlCommand = serde_json::from_str(&value)
-            .expect("ControlCommand should deserialize");
+        let parsed: ControlCommand = serde_json::from_str(&value)?;
         assert_eq!(parsed, ControlCommand::AllowUi);
+        Ok(())
     }
 }

@@ -148,9 +148,10 @@ pub fn default_config_path() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::{default_ui_sync_port, AppConfig};
+    use serde_json::Error as JsonError;
 
     #[test]
-    fn app_config_deserializes_without_ui_sync_port() {
+    fn app_config_deserializes_without_ui_sync_port() -> Result<(), JsonError> {
         let legacy_json = r#"{
             "is_headless": false,
             "websocket_url": "ws://127.0.0.1:49123",
@@ -162,14 +163,14 @@ mod tests {
             "reconnect_delay_seconds": 5
         }"#;
 
-        let config: AppConfig = serde_json::from_str(legacy_json)
-            .expect("Legacy config should deserialize with default ui_sync_port");
+        let config: AppConfig = serde_json::from_str(legacy_json)?;
 
         assert_eq!(config.ui_sync_port, default_ui_sync_port());
+        Ok(())
     }
 
     #[test]
-    fn app_config_deserializes_with_explicit_ui_sync_port() {
+    fn app_config_deserializes_with_explicit_ui_sync_port() -> Result<(), JsonError> {
         let json = r#"{
             "is_headless": false,
             "websocket_url": "ws://127.0.0.1:49123",
@@ -182,9 +183,9 @@ mod tests {
             "ui_sync_port": 60000
         }"#;
 
-        let config: AppConfig =
-            serde_json::from_str(json).expect("Config with ui_sync_port should deserialize");
+        let config: AppConfig = serde_json::from_str(json)?;
 
         assert_eq!(config.ui_sync_port, 60000);
+        Ok(())
     }
 }

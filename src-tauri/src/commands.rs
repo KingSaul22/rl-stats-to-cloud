@@ -33,6 +33,7 @@ pub fn save_config(
         .lock()
         .map_err(|_| "failed to acquire config lock".to_string())?;
     *guard = new_config;
+    drop(guard);
 
     Ok(())
 }
