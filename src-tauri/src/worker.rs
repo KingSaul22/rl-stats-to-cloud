@@ -1,10 +1,9 @@
 use crate::config::AppConfig;
 use crate::firebase::FirebaseClient;
-use crate::{AppState, SharedAppState};
+use crate::StateSender;
 use futures_util::StreamExt;
 use serde_json::Value;
 use std::time::Duration;
-use tauri::Emitter;
 use tokio::io::AsyncReadExt;
 use tokio::net::TcpStream;
 use tokio::time::sleep;
@@ -20,15 +19,14 @@ pub struct RocketLeagueWorker {
     websocket_url: String,
     reconnect_delay: Duration,
     firebase_client: FirebaseClient,
-    state: SharedAppState,
-    app_handle: Option<tauri::AppHandle>,
+    state_sender: StateSender,
 }
 
 impl RocketLeagueWorker {
+    #[must_use]
     pub fn from_config(
         config: &AppConfig,
-        state: SharedAppState,
-        app_handle: Option<tauri::AppHandle>,
+        state_sender: StateSender,
     ) -> Self {
         Self {
             websocket_url: config.websocket_url.clone(),
@@ -37,8 +35,7 @@ impl RocketLeagueWorker {
                 config.firebase_url.clone(),
                 config.firebase_auth_token.clone(),
             ),
-            state,
-            app_handle,
+            state_sender,
         }
     }
 
@@ -150,7 +147,7 @@ impl RocketLeagueWorker {
 
             match message {
                 Message::Text(text) => self.handle_payload(&text),
-                Message::Binary(bytes) => match String::from_utf8(bytes.to_vec()) {
+                Message::Binary(bytes) => match String::from_utf8(bytes.clone()) {
                     Ok(text) => self.handle_payload(&text),
                     Err(err) => eprintln!("Skipping non-UTF8 binary frame: {err}"),
                 },
@@ -314,43 +311,18 @@ impl RocketLeagueWorker {
     }
 
     fn set_connected(&self, connected: bool) {
-        let state_to_emit = if let Ok(mut guard) = self.state.lock() {
-            if guard.is_connected == connected {
-                None
-            } else {
-                guard.is_connected = connected;
-                Some(guard.clone())
-            }
-        } else {
-            None
-        };
-
-        if let Some(state) = state_to_emit {
-            self.emit_status_update(&state);
+        let mut new_state = self.state_sender.borrow().clone();
+        if new_state.is_connected != connected {
+            new_state.is_connected = connected;
+            let _ = self.state_sender.send(new_state);
         }
     }
 
     fn set_last_event(&self, event_name: &str) {
-        let state_to_emit = if let Ok(mut guard) = self.state.lock() {
-            if guard.last_event == event_name {
-                None
-            } else {
-                guard.last_event = event_name.to_string();
-                Some(guard.clone())
-            }
-        } else {
-            None
-        };
-
-        if let Some(state) = state_to_emit {
-            self.emit_status_update(&state);
+        let mut new_state = self.state_sender.borrow().clone();
+        if new_state.last_event != event_name {
+            new_state.last_event = event_name.to_string();
+            let _ = self.state_sender.send(new_state);
         }
-    }
-
-    fn emit_status_update(&self, state: &AppState) {
-        if let Some(app_handle) = &self.app_handle
-            && let Err(err) = app_handle.emit("status-update", state) {
-                eprintln!("failed to emit status-update event: {err}");
-            }
     }
 }

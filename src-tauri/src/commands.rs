@@ -1,4 +1,4 @@
-use crate::{AppConfig, AppState, SharedAppState, SharedConfig, SharedConfigManager};
+use crate::{AppConfig, AppState, SharedConfig, SharedConfigManager, StateReceiver};
 
 /// Get the current application configuration.
 /// 
@@ -30,18 +30,13 @@ pub fn save_config(
         .lock()
         .map_err(|_| "failed to acquire config lock".to_string())?;
     *guard = new_config;
+    drop(guard);
 
     Ok(())
 }
 
-/// Get the current application status.
-/// 
-/// # Errors
-/// Returns an error if the application state lock cannot be acquired.
 #[tauri::command]
-pub fn get_status(state: tauri::State<'_, SharedAppState>) -> Result<AppState, String> {
-    let guard = state
-        .lock()
-        .map_err(|_| "failed to acquire app state lock".to_string())?;
-    Ok(guard.clone())
+#[must_use]
+pub fn get_status(state: tauri::State<'_, StateReceiver>) -> AppState {
+    state.borrow().clone()
 }

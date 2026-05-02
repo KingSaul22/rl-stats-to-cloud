@@ -2,7 +2,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use rl_stats_to_cloud_lib::{default_config_path, ConfigManager, RocketLeagueWorker};
-use std::sync::{Arc, Mutex};
 use tokio_util::sync::CancellationToken;
 
 fn main() {
@@ -47,8 +46,9 @@ fn run_headless(config: rl_stats_to_cloud_lib::AppConfig) {
     };
 
     runtime.block_on(async move {
-        let shared_state = Arc::new(Mutex::new(rl_stats_to_cloud_lib::AppState::default()));
-        let worker = RocketLeagueWorker::from_config(&config, shared_state, None);
+        let (state_sender, _state_receiver) =
+            tokio::sync::watch::channel(rl_stats_to_cloud_lib::AppState::default());
+        let worker = RocketLeagueWorker::from_config(&config, state_sender);
         let shutdown = CancellationToken::new();
         let worker_shutdown = shutdown.clone();
 

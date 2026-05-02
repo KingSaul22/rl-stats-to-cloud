@@ -69,20 +69,17 @@ impl FirebaseClient {
         url
     }
 
-        if let Some(start) = url.find("auth=") {
     fn redact_url(url: &str) -> String {
+        url.find("auth=").map_or_else(|| url.to_string(), |start| {
             let token_start = start + "auth=".len();
             let token_end = url[token_start..]
                 .find('&')
-                .map(|index| token_start + index)
-                .unwrap_or(url.len());
+                .map_or(url.len(), |index| token_start + index);
 
             let mut redacted = url.to_string();
             redacted.replace_range(token_start..token_end, "[REDACTED]");
             redacted
-        } else {
-            url.to_string()
-        }
+        })
     }
 
     fn redact_message(&self, message: &str) -> String {

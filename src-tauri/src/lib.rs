@@ -12,11 +12,11 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex,
 };
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 use tauri::async_runtime::JoinHandle;
+use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
-pub type SharedAppState = Arc<Mutex<AppState>>;
 pub type SharedConfig = Arc<Mutex<AppConfig>>;
 pub type SharedConfigManager = Arc<ConfigManager>;
 
@@ -25,6 +25,9 @@ pub struct AppState {
     pub is_connected: bool,
     pub last_event: String,
 }
+
+pub type StateSender = tokio::sync::watch::Sender<AppState>;
+pub type StateReceiver = tokio::sync::watch::Receiver<AppState>;
 
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
@@ -40,7 +43,8 @@ fn greet(name: &str) -> String {
 /// Returns a `tauri::Error` if the application fails to build or run.
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run_tauri(config: AppConfig) -> Result<(), tauri::Error> {
-    let shared_state: SharedAppState = Arc::new(Mutex::new(AppState::default()));
+    let (state_sender, state_receiver): (StateSender, StateReceiver) =
+        watch::channel(AppState::default());
     let shared_config: SharedConfig = Arc::new(Mutex::new(config.clone()));
     let shutdown = CancellationToken::new();
     let is_shutting_down = Arc::new(AtomicBool::new(false));
@@ -48,12 +52,13 @@ pub fn run_tauri(config: AppConfig) -> Result<(), tauri::Error> {
 
     let setup_shutdown = shutdown.clone();
     let setup_config = config;
-    let setup_shared_state = Arc::clone(&shared_state);
+    let setup_state_sender = state_sender;
+    let setup_state_receiver = state_receiver.clone();
     let setup_worker_task = Arc::clone(&worker_task);
 
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .manage(Arc::clone(&shared_state))
+        .manage(state_receiver)
         .manage(Arc::clone(&shared_config))
         .invoke_handler(tauri::generate_handler![
             greet,
@@ -70,10 +75,20 @@ pub fn run_tauri(config: AppConfig) -> Result<(), tauri::Error> {
             ));
             app.manage(config_manager);
 
+            let mut event_receiver = setup_state_receiver.clone();
+            let app_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                while event_receiver.changed().await.is_ok() {
+                    let state = event_receiver.borrow().clone();
+                    if let Err(err) = app_handle.emit("status-update", state) {
+                        eprintln!("failed to emit status-update event: {err}");
+                    }
+                }
+            });
+
             let worker = RocketLeagueWorker::from_config(
                 &setup_config,
-                Arc::clone(&setup_shared_state),
-                Some(app.handle().clone()),
+                setup_state_sender.clone(),
             );
             let worker_shutdown = setup_shutdown.clone();
             let handle = tauri::async_runtime::spawn(async move {
