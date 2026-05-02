@@ -18,17 +18,14 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+rl_stats_core = { path = "../core" }
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "signal", "sync"] }
-tokio-tungstenite = "0.23"
-futures-util = "0.3"
-url = "2"
-reqwest = { version = "0.12", features = ["json"] }
 tokio-util = "0.7"
-async-trait = "0.1"
+
+# [patch.crates-io]
+# urlpattern = { git = "https://github.com/KingSaul22/rust-urlpattern", rev = "c0de7f245a1b9b285a789334024e7f8889cc7232" }
 
 [lints.rust]
 unsafe_code = "forbid"

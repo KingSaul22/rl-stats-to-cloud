@@ -1,8 +1,9 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use rl_stats_to_cloud_lib::{
-    connector_factory, default_config_path, ConfigManager, RocketLeagueWorker,
+use rl_stats_core::{
+    connector_factory, default_config_path, AppConfig, AppState, ConfigManager,
+    RocketLeagueWorker,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -18,7 +19,7 @@ fn main() {
                 config_manager.path().display(),
                 err
             );
-            rl_stats_to_cloud_lib::AppConfig::default()
+            AppConfig::default()
         }
     };
 
@@ -33,7 +34,7 @@ fn main() {
     }
 }
 
-fn run_headless(config: rl_stats_to_cloud_lib::AppConfig) {
+fn run_headless(config: AppConfig) {
     println!("Starting in headless mode...");
 
     let runtime = match tokio::runtime::Builder::new_multi_thread()
@@ -49,7 +50,7 @@ fn run_headless(config: rl_stats_to_cloud_lib::AppConfig) {
 
     runtime.block_on(async move {
         let (state_sender, _state_receiver) =
-            tokio::sync::watch::channel(rl_stats_to_cloud_lib::AppState::default());
+            tokio::sync::watch::channel(AppState::default());
         let initial_sink = connector_factory(&config.connector);
         let (_sink_sender, sink_receiver) = tokio::sync::watch::channel(initial_sink);
         let worker = RocketLeagueWorker::from_config(&config, state_sender, sink_receiver);

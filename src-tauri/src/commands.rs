@@ -1,7 +1,5 @@
-use crate::{
-    connector_factory, AppConfig, AppState, SharedConfig, SharedConfigManager, SinkSender,
-    StateReceiver,
-};
+use crate::{SharedConfig, SharedConfigManager};
+use rl_stats_core::{connector_factory, AppConfig, AppState, SinkSender, StateReceiver};
 
 /// Get the current application configuration.
 /// 

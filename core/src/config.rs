@@ -67,7 +67,7 @@ impl ConfigManager {
     }
 
     /// Loads the configuration from the file if it exists, otherwise creates a new file with default settings and returns that.
-    /// 
+    ///
     /// # Errors
     /// Returns an error if reading from or writing to the file fails, or if the file contents cannot be parsed as JSON.
     pub fn load_or_create(&self) -> ConfigResult<AppConfig> {
@@ -81,7 +81,7 @@ impl ConfigManager {
     }
 
     /// Loads the configuration from the file.
-    /// 
+    ///
     /// # Errors
     /// Returns an error if reading from the file fails or if the file contents cannot be parsed as JSON.
     pub fn load(&self) -> ConfigResult<AppConfig> {
@@ -91,7 +91,7 @@ impl ConfigManager {
     }
 
     /// Saves the provided configuration to the file, creating any necessary parent directories.
-    /// 
+    ///
     /// # Errors
     /// Returns an error if creating parent directories fails, if serializing the configuration to JSON fails, or if writing to the file fails.
     pub fn save(&self, config: &AppConfig) -> ConfigResult<()> {

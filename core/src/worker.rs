@@ -258,6 +258,7 @@ impl RocketLeagueWorker {
                     if consumed == 0 {
                         break;
                     }
+
                     self.handle_value(value);
                     pending.drain(..consumed);
                 }

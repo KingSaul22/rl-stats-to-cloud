@@ -1,14 +1,8 @@
 pub mod commands;
-pub mod connector;
-pub mod config;
-pub mod firebase;
-pub mod worker;
-
-pub use connector::{connector_factory, EventSink, SinkReceiver, SinkSender};
-pub use config::{default_config_path, AppConfig, ConfigManager};
-pub use firebase::FirebaseConnector;
-pub use worker::RocketLeagueWorker;
-use serde::Serialize;
+use rl_stats_core::{
+    connector_factory, AppConfig, AppState, ConfigManager, RocketLeagueWorker, SinkReceiver,
+    SinkSender, StateReceiver, StateSender,
+};
 use std::fs;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -23,16 +17,6 @@ pub type SharedConfig = Arc<Mutex<AppConfig>>;
 pub type SharedConfigManager = Arc<ConfigManager>;
 pub type WorkerTaskHandle = JoinHandle<()>;
 pub type SharedWorkerTask = Arc<Mutex<Option<WorkerTaskHandle>>>;
-
-#[derive(Default, Debug, Clone, Serialize)]
-pub struct AppState {
-    pub is_connected: bool,
-    pub last_event: String,
-}
-
-pub type StateSender = tokio::sync::watch::Sender<AppState>;
-pub type StateReceiver = tokio::sync::watch::Receiver<AppState>;
-
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
