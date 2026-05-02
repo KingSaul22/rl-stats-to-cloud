@@ -4,40 +4,66 @@
     <meta charset="UTF-8" />
     <link rel="stylesheet" href="/src/styles.css" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Tauri App</title>
-    <script type="module" src="/src/main.ts" defer></script>
+    <title>SAVETX - Rocket League Telemetry</title>
+    <script type="module" src="/src/main.js" defer></script>
   </head>
 
   <body>
-    <main class="container">
-      <h1>Welcome to Tauri</h1>
+    <main class="app-shell">
+      <header class="app-header">
+        <h1>SAVETX - Rocket League Telemetry</h1>
+      </header>
 
-      <div class="row">
-        <a href="https://vite.dev" target="_blank">
-          <img src="/src/assets/vite.svg" class="logo vite" alt="Vite logo" />
-        </a>
-        <a href="https://tauri.app" target="_blank">
-          <img
-            src="/src/assets/tauri.svg"
-            class="logo tauri"
-            alt="Tauri logo"
-          />
-        </a>
-        <a href="https://www.typescriptlang.org/docs" target="_blank">
-          <img
-            src="/src/assets/typescript.svg"
-            class="logo typescript"
-            alt="typescript logo"
-          />
-        </a>
-      </div>
-      <p>Click on the Tauri logo to learn more about the framework</p>
+      <section class="panel" aria-labelledby="status-title">
+        <h2 id="status-title">Status</h2>
+        <div class="status-grid">
+          <p>
+            <span class="label">Connection:</span>
+            <span id="connection-status" class="status-chip waiting">Waiting</span>
+          </p>
+          <p>
+            <span class="label">Last Event:</span>
+            <span id="last-event">None</span>
+          </p>
+        </div>
+      </section>
 
-      <form class="row" id="greet-form">
-        <input id="greet-input" placeholder="Enter a name..." />
-        <button type="submit">Greet</button>
-      </form>
-      <p id="greet-msg"></p>
+      <section class="panel" aria-labelledby="config-title">
+        <h2 id="config-title">Configuration</h2>
+        <form id="config-form" class="config-form" autocomplete="off">
+          <label for="firebase-url">Firebase URL</label>
+          <input
+            id="firebase-url"
+            name="firebase_url"
+            type="text"
+            placeholder="https://your-project.firebaseio.com"
+            required
+          />
+
+          <label for="firebase-auth-token">Firebase Auth Token</label>
+          <input
+            id="firebase-auth-token"
+            name="firebase_auth_token"
+            type="password"
+            placeholder="Enter Firebase auth token"
+          />
+
+          <label for="reconnect-delay-seconds">Reconnect Delay (seconds)</label>
+          <input
+            id="reconnect-delay-seconds"
+            name="reconnect_delay_seconds"
+            type="number"
+            min="1"
+            step="1"
+            required
+          />
+
+          <div class="form-actions">
+            <button id="save-config" type="submit">Save Configuration</button>
+            <span id="save-status" class="save-status" role="status" aria-live="polite"></span>
+          </div>
+        </form>
+      </section>
     </main>
   </body>
 </html>

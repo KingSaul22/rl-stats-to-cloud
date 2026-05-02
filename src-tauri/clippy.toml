@@ -1,0 +1,7 @@
+# Reduce complexity and enforce clarity
+cognitive-complexity-threshold = 10
+too-many-arguments-threshold = 4
+type-complexity-threshold = 50
+
+# Discourage allocations and hidden behavior
+avoid-breaking-exported-api = false
