@@ -4,7 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 pub type ConfigResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
-const APP_CONFIG_DIR_NAME: &str = "com.kingsaul22.rlstatscloud.app";
+const APP_CONFIG_DIR_NAME: &str = "com.kingsaul22.rlstatscloud";
 const CONFIG_FILE_NAME: &str = "config.json";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
