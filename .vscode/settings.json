@@ -1,9 +1,14 @@
 {
+  "rust-analyzer.checkOnSave": true,
   "rust-analyzer.check.command": "clippy",
-  "rust-analyzer.checkOnSave.command": "clippy",
-  "rust-analyzer.checkOnSave.extraArgs": [
+  "rust-analyzer.cargo.allTargets": true,
+  // Forward the same arguments you used before
+  "rust-analyzer.cargo.extraArgs": [
     "--all-features",
     "--",
-    "-D", "warnings"
-  ]
+    "-D",
+    "warnings"
+  ],
+  // (Optional) make the language server always enable diagnostics
+  "rust-analyzer.diagnostics.enable": true
 }
