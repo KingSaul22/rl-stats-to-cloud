@@ -1,0 +1,9 @@
+{
+  "rust-analyzer.check.command": "clippy",
+  "rust-analyzer.checkOnSave.command": "clippy",
+  "rust-analyzer.checkOnSave.extraArgs": [
+    "--all-features",
+    "--",
+    "-D", "warnings"
+  ]
+}
