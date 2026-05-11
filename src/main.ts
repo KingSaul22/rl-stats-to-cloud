@@ -1,18 +1,41 @@
 import { listen } from "@tauri-apps/api/event";
 import { CONSTANTS } from "./constants";
-import type { AppConfig } from "./schemas";
+import type { AppConfig, StatusPayload } from "./schemas";
 import { parseStatusPayload } from "./schemas";
-import { state } from "./state";
 import { api } from "./api";
 import {
+  initializeDOMCache,
   requiredElement,
-  renderConnectionStatusConnecting,
+  renderConnectionState,
   renderConfigForm,
   renderSaveMessage,
   renderStatus,
   resetSaveMessageTimeout,
   startSaveMessageTimeout,
+  setFormButtonState,
 } from "./ui";
+
+// ============================================================================
+// CENTRALIZED MUTABLE STATE
+// ============================================================================
+
+const DEFAULT_CONFIG: AppConfig = {
+  connector: { type: "", url: "", authToken: null },
+  reconnectDelaySeconds: CONSTANTS.DEFAULT_DELAYS.RECONNECT,
+  isHeadless: false,
+  websocketUrl: "ws://localhost:1420",
+  uiSyncPort: 54321,
+};
+
+const DEFAULT_STATUS: StatusPayload = {
+  isConnected: false,
+  lastEvent: "",
+};
+
+const state: { config: AppConfig; status: StatusPayload } = {
+  config: { ...DEFAULT_CONFIG },
+  status: { ...DEFAULT_STATUS },
+};
 
 // ============================================================================
 // MODULE SCOPE
@@ -70,15 +93,13 @@ async function handleSaveConfig(event: Event): Promise<void> {
   );
 
   const previousButtonLabel = saveBtn.textContent;
-  saveBtn.disabled = true;
-  saveBtn.textContent = CONSTANTS.UI_MESSAGES.SAVING;
+  setFormButtonState(true, CONSTANTS.UI_MESSAGES.SAVING);
 
   const reconnectDelay = Number(delayEl.value);
   if (!Number.isFinite(reconnectDelay) || reconnectDelay <= 0) {
     logError("handleSaveConfig", `Invalid reconnect delay: ${reconnectDelay}`);
     renderSaveMessage(CONSTANTS.UI_MESSAGES.SAVED_ERROR, false);
-    saveBtn.disabled = false;
-    saveBtn.textContent = previousButtonLabel || "Save";
+    setFormButtonState(false, previousButtonLabel || "Save Configuration");
     return;
   }
 
@@ -89,9 +110,9 @@ async function handleSaveConfig(event: Event): Promise<void> {
       authToken: authEl.value || null,
     },
     reconnectDelaySeconds: Math.floor(reconnectDelay),
-    isHeadless: state.config.isHeadless, // Preserve existing headless setting
-    websocketUrl: state.config.websocketUrl, // Preserve existing websocket URL
-    uiSyncPort: state.config.uiSyncPort, // Preserve existing UI sync port
+    isHeadless: state.config.isHeadless,
+    websocketUrl: state.config.websocketUrl,
+    uiSyncPort: state.config.uiSyncPort,
   };
 
   try {
@@ -104,8 +125,7 @@ async function handleSaveConfig(event: Event): Promise<void> {
     renderSaveMessage(CONSTANTS.UI_MESSAGES.SAVED_ERROR, false);
   } finally {
     startSaveMessageTimeout();
-    saveBtn.disabled = false;
-    saveBtn.textContent = previousButtonLabel || CONSTANTS.UI_MESSAGES.SAVED_SUCCESS;
+    setFormButtonState(false, previousButtonLabel || "Save Configuration");
   }
 }
 
@@ -129,7 +149,7 @@ async function initialize(): Promise<void> {
     await registerStatusListener();
 
     // Show connecting state
-    renderConnectionStatusConnecting();
+    renderConnectionState(CONSTANTS.CONNECTION_STATES.CONNECTING);
 
     // Load initial state
     await loadConfig();
@@ -152,13 +172,19 @@ function cleanup(): void {
 // ============================================================================
 
 window.addEventListener("DOMContentLoaded", () => {
-  const formEl = requiredElement<HTMLFormElement>(
-    CONSTANTS.UI_SELECTORS.CONFIG_FORM,
-    "config-form"
-  );
-  formEl.addEventListener("submit", handleSaveConfig);
+  try {
+    initializeDOMCache();
 
-  void initialize();
+    const formEl = requiredElement<HTMLFormElement>(
+      CONSTANTS.UI_SELECTORS.CONFIG_FORM,
+      "config-form"
+    );
+    formEl.addEventListener("submit", handleSaveConfig);
+
+    void initialize();
+  } catch (error) {
+    logError("DOMContentLoaded", error);
+  }
 });
 
 window.addEventListener("beforeunload", () => {

@@ -2,7 +2,7 @@ import { z } from "zod";
 import { CONSTANTS } from "./constants";
 
 // ============================================================================
-// ZOD SCHEMAS (VALIDATION ONLY, NO TRANSFORMS)
+// ZOD SCHEMAS (VALIDATION ONLY, WITH PASSTHROUGH)
 // ============================================================================
 
 // Raw API response types (may have snake_case or camelCase fields)
@@ -13,18 +13,18 @@ export const RawConnectorConfigSchema = z
     auth_token: z.string().nullable().optional(),
     authToken: z.string().nullable().optional(),
   })
-  .strict();
+  .loose();
 
 export const RawAppConfigSchema = z
   .object({
     connector: RawConnectorConfigSchema.optional(),
     reconnect_delay_seconds: z.number().optional(),
     reconnectDelaySeconds: z.number().optional(),
-    is_headless: z.boolean().catch(false),
-    websocket_url: z.string().catch("ws://localhost:1420"),
-    ui_sync_port: z.number().catch(54321),
+    is_headless: z.boolean().optional(),
+    websocket_url: z.string().optional(),
+    ui_sync_port: z.number().optional(),
   })
-  .strict();
+  .loose();
 
 export const RawStatusPayloadSchema = z
   .object({
@@ -33,7 +33,7 @@ export const RawStatusPayloadSchema = z
     last_event: z.string().optional(),
     lastEvent: z.string().optional(),
   })
-  .strict();
+  .loose();
 
 // ============================================================================
 // NORMALIZED INTERNAL TYPES (ALWAYS CAMELCASE, STRICTLY TYPED)
@@ -67,41 +67,48 @@ export type StatusPayload = {
 export function normalizeAppConfig(raw: unknown): AppConfig {
   const validated = RawAppConfigSchema.parse(raw);
 
+  // Extract connector fields with explicit fallbacks
   const connectorRaw = validated.connector;
-  const connectorType =
-    typeof connectorRaw === "object" && connectorRaw !== null
-      ? (connectorRaw as Record<string, unknown>).type ??
-        (connectorRaw as Record<string, unknown>).authToken ??
-        ""
-      : "";
+  let connectorType = "";
+  let connectorUrl = "";
+  let connectorAuthToken: string | null = null;
 
-  const connectorUrl =
-    typeof connectorRaw === "object" && connectorRaw !== null
-      ? (connectorRaw as Record<string, unknown>).url ?? ""
-      : "";
+  if (connectorRaw && typeof connectorRaw === "object") {
+    const conn = connectorRaw as { type?: unknown; url?: unknown; auth_token?: unknown; authToken?: unknown };
+    connectorType = typeof conn.type === "string" ? conn.type : "";
+    connectorUrl = typeof conn.url === "string" ? conn.url : "";
+    const authRaw = conn.auth_token ?? conn.authToken;
+    connectorAuthToken = typeof authRaw === "string" ? authRaw : null;
+  }
 
-  const connectorAuthToken =
-    typeof connectorRaw === "object" && connectorRaw !== null
-      ? ((connectorRaw as Record<string, unknown>).auth_token ??
-          (connectorRaw as Record<string, unknown>).authToken) ??
-        null
-      : null;
+  const reconnectDelay =
+    typeof validated.reconnect_delay_seconds === "number"
+      ? validated.reconnect_delay_seconds
+      : typeof validated.reconnectDelaySeconds === "number"
+        ? validated.reconnectDelaySeconds
+        : undefined;
 
-  const reconnectDelay = validated.reconnect_delay_seconds ?? validated.reconnectDelaySeconds;
   if (reconnectDelay !== undefined && (!Number.isFinite(reconnectDelay) || reconnectDelay <= 0)) {
     throw new Error(`Invalid reconnect delay: ${reconnectDelay}. Must be a positive number.`);
   }
 
+  const isHeadless =
+    typeof validated.is_headless === "boolean" ? validated.is_headless : false;
+  const websocketUrl =
+    typeof validated.websocket_url === "string" ? validated.websocket_url : "ws://localhost:1420";
+  const uiSyncPort =
+    typeof validated.ui_sync_port === "number" ? validated.ui_sync_port : 54321;
+
   return {
     connector: {
-      type: String(connectorType),
-      url: String(connectorUrl),
-      authToken: connectorAuthToken === null ? null : String(connectorAuthToken),
+      type: connectorType,
+      url: connectorUrl,
+      authToken: connectorAuthToken,
     },
     reconnectDelaySeconds: reconnectDelay ?? CONSTANTS.DEFAULT_DELAYS.RECONNECT,
-    isHeadless: validated.is_headless ?? false,
-    websocketUrl: validated.websocket_url ?? "ws://localhost:1420",
-    uiSyncPort: validated.ui_sync_port ?? 54321,
+    isHeadless,
+    websocketUrl,
+    uiSyncPort,
   };
 }
 
