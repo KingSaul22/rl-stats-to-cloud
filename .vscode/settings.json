@@ -10,5 +10,11 @@
     "warnings"
   ],
   // (Optional) make the language server always enable diagnostics
-  "rust-analyzer.diagnostics.enable": true
+  "rust-analyzer.diagnostics.enable": true,
+  "chat.tools.terminal.autoApprove": {
+    "/^bun run build 2>&1$/": {
+      "approve": true,
+      "matchCommandLine": true
+    }
+  }
 }
