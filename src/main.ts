@@ -1,195 +1,458 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { z } from "zod";
 
-// 1. STRIcT TYPES
-type ConnectorConfig = {
-  type?: string;
-  url?: string;
-  auth_token?: string | null;
-  authToken?: string | null;
-};
+// ============================================================================
+// PHASE 1: COMMANDS & CONSTANTS
+// ============================================================================
 
-type AppConfig = Record<string, unknown> & {
-  connector?: ConnectorConfig;
-  reconnect_delay_seconds?: number;
-  reconnectDelaySeconds?: number;
+const COMMANDS = {
+  GET_CONFIG: "get_config",
+  SAVE_CONFIG: "save_config",
+  GET_STATUS: "get_status",
+} as const;
+
+const CONSTANTS = {
+  CONNECTOR_TYPES: {
+    FIREBASE: "Firebase",
+  },
+  CONNECTION_STATES: {
+    CONNECTING: "connecting",
+    CONNECTED: "connected",
+    DISCONNECTED: "disconnected",
+  },
+  UI_MESSAGES: {
+    SAVING: "Saving...",
+    SAVED_SUCCESS: "Saved successfully!",
+    SAVED_ERROR: "Failed to save configuration",
+    INIT_ERROR: "Failed to initialize app state",
+    CONNECTING: "Connecting...",
+    CONNECTED: "Connected",
+    DISCONNECTED: "Disconnected",
+    NONE_EVENT: "None",
+  },
+  DEFAULT_DELAYS: {
+    RECONNECT: 5,
+    MESSAGE_FADE: 3000,
+  },
+  UI_SELECTORS: {
+    CONNECTION_STATUS: "#connection-status",
+    LAST_EVENT: "#last-event",
+    CONFIG_FORM: "#config-form",
+    SAVE_BUTTON: "#save-config",
+    SAVE_STATUS: "#save-status",
+    CONNECTOR_TYPE: "#connector-type",
+    CONNECTOR_URL: "#connector-url",
+    CONNECTOR_AUTH_TOKEN: "#connector-auth-token",
+    RECONNECT_DELAY: "#reconnect-delay-seconds",
+  },
+  CSS_CLASSES: {
+    STATUS_CONNECTING: "status-connecting",
+    STATUS_CONNECTED: "status-connected",
+    STATUS_DISCONNECTED: "status-disconnected",
+  },
+} as const;
+
+// ============================================================================
+// ZOD SCHEMAS (VALIDATION ONLY, NO TRANSFORMS)
+// ============================================================================
+
+// Raw API response types (may have snake_case or camelCase fields)
+const RawConnectorConfigSchema = z
+  .object({
+    type: z.string().optional(),
+    url: z.string().optional(),
+    auth_token: z.string().nullable().optional(),
+    authToken: z.string().nullable().optional(),
+  })
+  .strict();
+
+const RawAppConfigSchema = z
+  .object({
+    connector: RawConnectorConfigSchema.optional(),
+    reconnect_delay_seconds: z.number().optional(),
+    reconnectDelaySeconds: z.number().optional(),
+    is_headless: z.boolean().catch(false),
+    websocket_url: z.string().catch("ws://localhost:1420"),
+    ui_sync_port: z.number().catch(54321),
+  })
+  .strict();
+
+const RawStatusPayloadSchema = z
+  .object({
+    is_connected: z.boolean().optional(),
+    isConnected: z.boolean().optional(),
+    last_event: z.string().optional(),
+    lastEvent: z.string().optional(),
+  })
+  .strict();
+
+// Normalized internal types (always camelCase, strictly typed)
+type AppConfig = {
+  connector: {
+    type: string;
+    url: string;
+    authToken: string | null;
+  };
+  reconnectDelaySeconds: number;
+  isHeadless: boolean;
+  websocketUrl: string;
+  uiSyncPort: number;
 };
 
 type StatusPayload = {
-  is_connected?: boolean;
-  isConnected?: boolean;
-  last_event?: string;
-  lastEvent?: string;
+  isConnected: boolean;
+  lastEvent: string;
 };
 
-let currentConfig: AppConfig = {};
+// ============================================================================
+// PHASE 2: EXPLICIT NORMALIZATION FUNCTIONS
+// ============================================================================
+
+/**
+ * Normalize raw config from API to internal AppConfig.
+ * Fails loudly if validation fails (no silent fallbacks).
+ */
+function normalizeAppConfig(raw: unknown): AppConfig {
+  const validated = RawAppConfigSchema.parse(raw);
+
+  const connectorRaw = validated.connector;
+  const connectorType =
+    typeof connectorRaw === "object" && connectorRaw !== null
+      ? (connectorRaw as Record<string, unknown>).type ??
+        (connectorRaw as Record<string, unknown>).authToken ??
+        ""
+      : "";
+
+  const connectorUrl =
+    typeof connectorRaw === "object" && connectorRaw !== null
+      ? (connectorRaw as Record<string, unknown>).url ?? ""
+      : "";
+
+  const connectorAuthToken =
+    typeof connectorRaw === "object" && connectorRaw !== null
+      ? ((connectorRaw as Record<string, unknown>).auth_token ??
+          (connectorRaw as Record<string, unknown>).authToken) ??
+        null
+      : null;
+
+  const reconnectDelay = validated.reconnect_delay_seconds ?? validated.reconnectDelaySeconds;
+  if (reconnectDelay !== undefined && (!Number.isFinite(reconnectDelay) || reconnectDelay <= 0)) {
+    throw new Error(`Invalid reconnect delay: ${reconnectDelay}. Must be a positive number.`);
+  }
+
+  return {
+    connector: {
+      type: String(connectorType),
+      url: String(connectorUrl),
+      authToken: connectorAuthToken === null ? null : String(connectorAuthToken),
+    },
+    reconnectDelaySeconds: reconnectDelay ?? CONSTANTS.DEFAULT_DELAYS.RECONNECT,
+    isHeadless: validated.is_headless ?? false,
+    websocketUrl: validated.websocket_url ?? "ws://localhost:1420",
+    uiSyncPort: validated.ui_sync_port ?? 54321,
+  };
+}
+
+/**
+ * Normalize raw status payload from API to internal StatusPayload.
+ * Fails loudly if validation fails (no silent fallbacks).
+ */
+function normalizeStatusPayload(raw: unknown): StatusPayload {
+  const validated = RawStatusPayloadSchema.parse(raw);
+
+  const isConnected = validated.is_connected ?? validated.isConnected ?? false;
+  const lastEvent = validated.last_event ?? validated.lastEvent ?? "";
+
+  if (typeof isConnected !== "boolean") {
+    throw new Error(`Invalid isConnected: expected boolean, got ${typeof isConnected}`);
+  }
+  if (typeof lastEvent !== "string") {
+    throw new Error(`Invalid lastEvent: expected string, got ${typeof lastEvent}`);
+  }
+
+  return {
+    isConnected,
+    lastEvent,
+  };
+}
+
+// ============================================================================
+// PHASE 3: RUNTIME VALIDATION & DATA BOUNDARIES
+// ============================================================================
+
+/**
+ * Parse and validate app config from raw API response.
+ * Throws on validation failure for explicit error handling.
+ */
+function parseAppConfig(data: unknown): AppConfig {
+  return normalizeAppConfig(data);
+}
+
+/**
+ * Parse and validate status payload from raw API response.
+ * Throws on validation failure for explicit error handling.
+ */
+function parseStatusPayload(data: unknown): StatusPayload {
+  return normalizeStatusPayload(data);
+}
+
+// ============================================================================
+// PHASE 4: CENTRALIZED STATE & API LAYER
+// ============================================================================
+
+// Default config and status values
+const DEFAULT_CONFIG: AppConfig = {
+  connector: { type: "", url: "", authToken: null },
+  reconnectDelaySeconds: CONSTANTS.DEFAULT_DELAYS.RECONNECT,
+  isHeadless: false,
+  websocketUrl: "ws://localhost:1420",
+  uiSyncPort: 54321,
+};
+
+const DEFAULT_STATUS: StatusPayload = {
+  isConnected: false,
+  lastEvent: "",
+};
+
+// Centralized mutable state object
+const state: { config: AppConfig; status: StatusPayload } = {
+  config: { ...DEFAULT_CONFIG },
+  status: { ...DEFAULT_STATUS },
+};
+
+// API layer with explicit command constants
+const api = {
+  async getConfig(): Promise<AppConfig> {
+    const data = await invoke<unknown>(COMMANDS.GET_CONFIG);
+    return parseAppConfig(data);
+  },
+
+  async saveConfig(config: AppConfig): Promise<void> {
+    await invoke<void>(COMMANDS.SAVE_CONFIG, { newConfig: config });
+  },
+
+  async getStatus(): Promise<StatusPayload> {
+    const data = await invoke<unknown>(COMMANDS.GET_STATUS);
+    return parseStatusPayload(data);
+  },
+};
+
+// ============================================================================
+// PHASE 5: DOM SAFETY & UI RENDERING
+// ============================================================================
+
+function requiredElement<T extends Element>(selector: string, context = ""): T {
+  const element = document.querySelector<T>(selector);
+  if (!element) {
+    throw new Error(`DOM element not found: ${selector}${context ? ` (${context})` : ""}`);
+  }
+  return element;
+}
+
+function renderConnectionStatus(isConnected: boolean): void {
+  const el = requiredElement<HTMLElement>(CONSTANTS.UI_SELECTORS.CONNECTION_STATUS, "connection-status");
+
+  // Remove all status classes
+  el.classList.remove(
+    CONSTANTS.CSS_CLASSES.STATUS_CONNECTING,
+    CONSTANTS.CSS_CLASSES.STATUS_CONNECTED,
+    CONSTANTS.CSS_CLASSES.STATUS_DISCONNECTED
+  );
+
+  if (isConnected) {
+    el.textContent = CONSTANTS.UI_MESSAGES.CONNECTED;
+    el.classList.add(CONSTANTS.CSS_CLASSES.STATUS_CONNECTED);
+  } else {
+    el.textContent = CONSTANTS.UI_MESSAGES.DISCONNECTED;
+    el.classList.add(CONSTANTS.CSS_CLASSES.STATUS_DISCONNECTED);
+  }
+}
+
+function renderConnectionStatusConnecting(): void {
+  const el = requiredElement<HTMLElement>(CONSTANTS.UI_SELECTORS.CONNECTION_STATUS, "connection-status");
+
+  el.classList.remove(
+    CONSTANTS.CSS_CLASSES.STATUS_CONNECTING,
+    CONSTANTS.CSS_CLASSES.STATUS_CONNECTED,
+    CONSTANTS.CSS_CLASSES.STATUS_DISCONNECTED
+  );
+
+  el.textContent = CONSTANTS.UI_MESSAGES.CONNECTING;
+  el.classList.add(CONSTANTS.CSS_CLASSES.STATUS_CONNECTING);
+}
+
+function renderLastEvent(lastEvent: string): void {
+  const el = requiredElement<HTMLElement>(CONSTANTS.UI_SELECTORS.LAST_EVENT, "last-event");
+  const normalized = lastEvent.trim() || CONSTANTS.UI_MESSAGES.NONE_EVENT;
+  el.textContent = normalized;
+}
+
+function renderStatus(status: StatusPayload): void {
+  renderConnectionStatus(status.isConnected);
+  renderLastEvent(status.lastEvent);
+}
+
+function renderConfigForm(config: AppConfig): void {
+  const typeEl = requiredElement<HTMLSelectElement>(CONSTANTS.UI_SELECTORS.CONNECTOR_TYPE, "connector-type");
+  const urlEl = requiredElement<HTMLInputElement>(CONSTANTS.UI_SELECTORS.CONNECTOR_URL, "connector-url");
+  const authEl = requiredElement<HTMLInputElement>(
+    CONSTANTS.UI_SELECTORS.CONNECTOR_AUTH_TOKEN,
+    "connector-auth-token"
+  );
+  const delayEl = requiredElement<HTMLInputElement>(CONSTANTS.UI_SELECTORS.RECONNECT_DELAY, "reconnect-delay");
+
+  typeEl.value = config.connector.type || CONSTANTS.CONNECTOR_TYPES.FIREBASE;
+  urlEl.value = config.connector.url;
+  authEl.value = config.connector.authToken || "";
+  delayEl.value = String(config.reconnectDelaySeconds);
+}
+
+function renderSaveMessage(message: string, isSuccess: boolean): void {
+  const el = requiredElement<HTMLElement>(CONSTANTS.UI_SELECTORS.SAVE_STATUS, "save-status");
+  el.textContent = message;
+  el.style.color = isSuccess ? "#59d185" : "#ef6461";
+}
+
+// ============================================================================
+// PHASE 6: LIFECYCLE, ASYNC & ERROR HANDLING
+// ============================================================================
+
 let saveFeedbackTimer: ReturnType<typeof setTimeout> | undefined;
+let unlistenFn: (() => void) | undefined;
 
-// 2. NON-NULL ASSERTIONS (!)
-// Assuming these elements are hardcoded in your HTML and always exist.
-const connectionStatusEl = document.querySelector<HTMLElement>("#connection-status")!;
-const lastEventEl = document.querySelector<HTMLElement>("#last-event")!;
-const formEl = document.querySelector<HTMLFormElement>("#config-form")!;
-const saveButtonEl = document.querySelector<HTMLButtonElement>("#save-config")!;
-const saveStatusEl = document.querySelector<HTMLElement>("#save-status")!;
-const connectorTypeEl = document.querySelector<HTMLSelectElement>("#connector-type")!;
-const connectorUrlEl = document.querySelector<HTMLInputElement>("#connector-url")!;
-const connectorAuthTokenEl = document.querySelector<HTMLInputElement>("#connector-auth-token")!;
-const reconnectDelayEl = document.querySelector<HTMLInputElement>("#reconnect-delay-seconds")!;
-
-function readConfigField(
-  config: Record<string, unknown>,
-  snakeCase: string,
-  camelCase = ""
-): unknown {
-  if (Object.prototype.hasOwnProperty.call(config, snakeCase)) {
-    return config[snakeCase];
-  }
-
-  if (camelCase && Object.prototype.hasOwnProperty.call(config, camelCase)) {
-    return config[camelCase];
-  }
-
-  return "";
+function logError(context: string, error: unknown): void {
+  const errorMsg = error instanceof Error ? error.message : String(error);
+  console.error(`[${context}] ${errorMsg}`);
 }
 
-function normalizeEventLabel(rawEvent: unknown): string {
-  const text = typeof rawEvent === "string" ? rawEvent.trim() : "";
-  return text || "None";
+function resetSaveMessageTimeout(): void {
+  if (saveFeedbackTimer !== undefined) {
+    clearTimeout(saveFeedbackTimer);
+  }
 }
 
-function setConnectionStatus(isConnected: boolean, isInitialized = true): void {
-  if (!isInitialized) {
-    connectionStatusEl.textContent = "Connecting...";
-    connectionStatusEl.className = "status-connecting";
+function startSaveMessageTimeout(): void {
+  resetSaveMessageTimeout();
+  saveFeedbackTimer = setTimeout(() => {
+    const el = requiredElement<HTMLElement>(CONSTANTS.UI_SELECTORS.SAVE_STATUS, "save-status");
+    el.textContent = "";
+  }, CONSTANTS.DEFAULT_DELAYS.MESSAGE_FADE);
+}
+
+async function loadConfig(): Promise<void> {
+  const config = await api.getConfig();
+  state.config = config;
+  renderConfigForm(config);
+}
+
+async function loadStatus(): Promise<void> {
+  const status = await api.getStatus();
+  state.status = status;
+  renderStatus(status);
+}
+
+async function handleSaveConfig(event: Event): Promise<void> {
+  event.preventDefault();
+
+  const saveBtn = requiredElement<HTMLButtonElement>(CONSTANTS.UI_SELECTORS.SAVE_BUTTON, "save-button");
+  const typeEl = requiredElement<HTMLSelectElement>(CONSTANTS.UI_SELECTORS.CONNECTOR_TYPE, "connector-type");
+  const urlEl = requiredElement<HTMLInputElement>(CONSTANTS.UI_SELECTORS.CONNECTOR_URL, "connector-url");
+  const authEl = requiredElement<HTMLInputElement>(
+    CONSTANTS.UI_SELECTORS.CONNECTOR_AUTH_TOKEN,
+    "connector-auth-token"
+  );
+  const delayEl = requiredElement<HTMLInputElement>(CONSTANTS.UI_SELECTORS.RECONNECT_DELAY, "reconnect-delay");
+
+  const previousButtonLabel = saveBtn.textContent;
+  saveBtn.disabled = true;
+  saveBtn.textContent = CONSTANTS.UI_MESSAGES.SAVING;
+
+  const reconnectDelay = Number(delayEl.value);
+  if (!Number.isFinite(reconnectDelay) || reconnectDelay <= 0) {
+    logError("handleSaveConfig", `Invalid reconnect delay: ${reconnectDelay}`);
+    renderSaveMessage(CONSTANTS.UI_MESSAGES.SAVED_ERROR, false);
+    saveBtn.disabled = false;
+    saveBtn.textContent = previousButtonLabel || "Save";
     return;
   }
 
-  if (isConnected) {
-    connectionStatusEl.textContent = "Connected";
-    connectionStatusEl.className = "status-connected";
-  } else {
-    connectionStatusEl.textContent = "Disconnected";
-    connectionStatusEl.className = "status-disconnected";
-  }
-}
-
-function applyStatus(status: StatusPayload): void {
-  const isConnected = status.is_connected ?? status.isConnected ?? false;
-  setConnectionStatus(Boolean(isConnected));
-
-  const lastEvent = status.last_event ?? status.lastEvent;
-  lastEventEl.textContent = normalizeEventLabel(lastEvent);
-}
-
-function applyConfigToForm(config: AppConfig): void {
-  const connector = config.connector || {};
-  
-  connectorTypeEl.value = (connector.type as string) || "Firebase";
-  connectorUrlEl.value = (connector.url as string) || "";
-  connectorAuthTokenEl.value = (connector.auth_token as string) || (connector.authToken as string) || "";
-
-  const delay = readConfigField(config, "reconnect_delay_seconds", "reconnectDelaySeconds");
-  reconnectDelayEl.value = delay !== "" ? String(delay) : "5";
-}
-
-async function loadInitialConfig(): Promise<void> {
-  try {
-    const config = await invoke<AppConfig>("get_config");
-    currentConfig = config || {};
-    applyConfigToForm(currentConfig);
-  } catch (error) {
-    console.error("Failed to load initial config", error);
-  }
-}
-
-async function loadInitialStatus(): Promise<void> {
-  setConnectionStatus(false, false);
-  try {
-    const status = await invoke<StatusPayload>("get_status");
-    if (status) {
-      applyStatus(status);
-    } else {
-      setConnectionStatus(false);
-    }
-  } catch (error) {
-    console.error("Failed to load initial status", error);
-    setConnectionStatus(false);
-  }
-}
-
-function showSaveMessage(message: string, isSuccess: boolean): void {
-  saveStatusEl.textContent = message;
-  saveStatusEl.className = isSuccess ? "status-connected" : "status-disconnected";
-  saveStatusEl.style.opacity = "1";
-
-  if (saveFeedbackTimer) {
-    clearTimeout(saveFeedbackTimer);
-  }
-
-  saveFeedbackTimer = setTimeout(() => {
-    saveStatusEl.style.opacity = "0";
-  }, 3000);
-}
-
-async function saveConfig(e: Event): Promise<void> {
-  e.preventDefault();
-
-  const previousButtonLabel = saveButtonEl.textContent;
-  saveButtonEl.disabled = true;
-  saveButtonEl.textContent = "Saving...";
-
-  const reconnectDelay = Number(reconnectDelayEl.value);
-  const safeReconnectDelay =
-    Number.isFinite(reconnectDelay) && reconnectDelay > 0
-      ? Math.floor(reconnectDelay)
-      : 5;
-
-  const connector: ConnectorConfig = {
-    type: connectorTypeEl.value || "Firebase",
-    url: connectorUrlEl.value.trim(),
-    auth_token: connectorAuthTokenEl.value || null,
-  };
-
   const newConfig: AppConfig = {
-    ...currentConfig,
-    connector,
-    reconnect_delay_seconds: safeReconnectDelay,
+    connector: {
+      type: typeEl.value || CONSTANTS.CONNECTOR_TYPES.FIREBASE,
+      url: urlEl.value.trim(),
+      authToken: authEl.value || null,
+    },
+    reconnectDelaySeconds: Math.floor(reconnectDelay),
+    isHeadless: state.config.isHeadless, // Preserve existing headless setting
+    websocketUrl: state.config.websocketUrl, // Preserve existing websocket URL
+    uiSyncPort: state.config.uiSyncPort, // Preserve existing UI sync port
   };
 
   try {
-    // Note: passing the expected return type to invoke helps TS infer the response
-    await invoke<void>("save_config", { newConfig });
-    currentConfig = newConfig;
-    reconnectDelayEl.value = String(safeReconnectDelay);
-    showSaveMessage("Saved successfully!", true);
+    await api.saveConfig(newConfig);
+    state.config = newConfig;
+    delayEl.value = String(newConfig.reconnectDelaySeconds);
+    renderSaveMessage(CONSTANTS.UI_MESSAGES.SAVED_SUCCESS, true);
   } catch (error) {
-    console.error("Failed to save configuration", error);
-    showSaveMessage("Failed to save configuration", false);
+    logError("handleSaveConfig", error);
+    renderSaveMessage(CONSTANTS.UI_MESSAGES.SAVED_ERROR, false);
   } finally {
-    saveButtonEl.disabled = false;
-    saveButtonEl.textContent = previousButtonLabel || "Save Configuration";
+    startSaveMessageTimeout();
+    saveBtn.disabled = false;
+    saveBtn.textContent = previousButtonLabel || CONSTANTS.UI_MESSAGES.SAVED_SUCCESS;
   }
+}
+
+async function registerStatusListener(): Promise<void> {
+  unlistenFn = await listen<unknown>("status-update", (event) => {
+    if (event?.payload && typeof event.payload === "object") {
+      try {
+        const status = parseStatusPayload(event.payload);
+        state.status = status;
+        renderStatus(status);
+      } catch (error) {
+        logError("registerStatusListener: parseStatusPayload", error);
+      }
+    }
+  });
 }
 
 async function initialize(): Promise<void> {
   try {
-    await loadInitialConfig();
-    await loadInitialStatus();
+    // Register listener FIRST to avoid race condition
+    await registerStatusListener();
 
-    // Tauri's listen event payload can be typed!
-    await listen<StatusPayload>("status-update", (event) => {
-      if (event?.payload && typeof event.payload === "object") {
-        applyStatus(event.payload);
-      }
-    });
+    // Show connecting state
+    renderConnectionStatusConnecting();
+
+    // Load initial state
+    await loadConfig();
+    await loadStatus();
   } catch (error) {
-    console.error("Failed to initialize frontend", error);
-    showSaveMessage("Failed to initialize app state", false);
+    logError("initialize", error);
+    renderSaveMessage(CONSTANTS.UI_MESSAGES.INIT_ERROR, false);
   }
 }
 
+function cleanup(): void {
+  resetSaveMessageTimeout();
+  if (unlistenFn) {
+    unlistenFn();
+  }
+}
+
+// ============================================================================
+// PHASE 7: FINAL ASSEMBLY & TESTING
+// ============================================================================
+
 window.addEventListener("DOMContentLoaded", () => {
-  formEl.addEventListener("submit", saveConfig);
-  initialize();
+  const formEl = requiredElement<HTMLFormElement>(CONSTANTS.UI_SELECTORS.CONFIG_FORM, "config-form");
+  formEl.addEventListener("submit", handleSaveConfig);
+
+  void initialize();
+});
+
+window.addEventListener("beforeunload", () => {
+  cleanup();
 });
