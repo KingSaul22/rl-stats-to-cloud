@@ -1,5 +1,7 @@
 {
   "compilerOptions": {
+    "types": ["node", "@tauri-apps/api"],
+
     "target": "ES2020",
     "useDefineForClassFields": true,
     "module": "ESNext",
@@ -23,7 +25,19 @@
     /* Linting */
     "noUnusedLocals": true,
     "noUnusedParameters": true,
-    "noFallthroughCasesInSwitch": true
+    "noFallthroughCasesInSwitch": true,
+
+    // 1. Prevents bugs when moving code between Windows (case-insensitive) 
+    // and Linux (case-sensitive) file systems.
+    "forceConsistentCasingInFileNames": true,
+
+    // 2. Complements "noUncheckedIndexedAccess". It forces you to use 
+    // obj['key'] instead of obj.key for types with index signatures.
+    "noPropertyAccessFromIndexSignature": true,
+
+    // 3. Ensures that your TypeScript code doesn't rely on features 
+    // that the Tauri WebView (Chrome/WebKit) might not support.
+    "verbatimModuleSyntax": true
   },
   "include": ["src"]
 }
