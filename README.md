@@ -81,3 +81,8 @@ cargo deny check advisories
 ```bash
 cargo clippy --all-targets --all-features -- -D warnings -D clippy::all -D clippy::pedantic -D clippy::nursery
 ```
+
+## Update cargo dependencies
+```bash
+cargo outdated && cargo upgrade && cargo update && cargo check
+```

@@ -56,7 +56,8 @@ fn greet(name: &str) -> String {
 pub fn run_tauri(config: AppConfig) -> Result<(), tauri::Error> {
     let (state_sender, state_receiver): (StateSender, StateReceiver) =
         watch::channel(AppState::default());
-    let shared_config: SharedConfig = Arc::new(Mutex::new(config.clone()));
+    let ui_sync_port = config.ui_sync_port;
+    let shared_config: SharedConfig = Arc::new(Mutex::new(config));
     let shutdown = CancellationToken::new();
     let is_shutting_down = Arc::new(AtomicBool::new(false));
     let bridge_task: SharedBridgeTask = Arc::new(Mutex::new(None));
@@ -64,7 +65,6 @@ pub fn run_tauri(config: AppConfig) -> Result<(), tauri::Error> {
     let setup_shutdown = shutdown.clone();
     let setup_state_sender = state_sender;
     let setup_bridge_task = Arc::clone(&bridge_task);
-    let ui_sync_port = config.ui_sync_port;
 
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -85,28 +85,12 @@ pub fn run_tauri(config: AppConfig) -> Result<(), tauri::Error> {
             ));
             app.manage(config_manager);
 
-            let app_handle = app.handle().clone();
-            let ws_url = format!("ws://127.0.0.1:{ui_sync_port}");
-            let bridge_shutdown = setup_shutdown.clone();
-            let bridge_state_sender = setup_state_sender.clone();
-
-            let handle = tauri::async_runtime::spawn(async move {
-                let allow_reply = send_control_command(ControlCommand::AllowUi);
-                match allow_reply {
-                    ControlReply::Ok { message } => {
-                        println!("AllowUi command acknowledged from UI bridge: {message}");
-                    }
-                    ControlReply::NotRunning { message } => {
-                        eprintln!("AllowUi failed (daemon not running): {message}");
-                    }
-                    ControlReply::Error { message } => {
-                        eprintln!("AllowUi command error: {message}");
-                    }
-                }
-
-                run_state_bridge_loop(ws_url, app_handle, bridge_state_sender, bridge_shutdown)
-                    .await;
-            });
+            let handle = spawn_ui_bridge_task(
+                app.handle().clone(),
+                ui_sync_port,
+                setup_shutdown.clone(),
+                setup_state_sender.clone(),
+            );
 
             if let Ok(mut guard) = setup_bridge_task.lock() {
                 *guard = Some(handle);
@@ -128,27 +112,11 @@ pub fn run_tauri(config: AppConfig) -> Result<(), tauri::Error> {
             }
 
             api.prevent_exit();
-            event_shutdown.cancel();
-
-            if let Ok(mut guard) = event_bridge_task.lock()
-                && let Some(handle) = guard.take() {
-                    tauri::async_runtime::block_on(async {
-                        let _ = handle.await;
-                    });
-                }
-
-            let disallow_reply = send_control_command(ControlCommand::DisallowUi);
-            match disallow_reply {
-                ControlReply::Ok { message } => {
-                    println!("DisallowUi command acknowledged on UI shutdown: {message}");
-                }
-                ControlReply::NotRunning { message } => {
-                    eprintln!("DisallowUi on shutdown: daemon not running: {message}");
-                }
-                ControlReply::Error { message } => {
-                    eprintln!("DisallowUi on shutdown error: {message}");
-                }
-            }
+            shutdown_ui_bridge_and_disallow(
+                &event_shutdown,
+                &event_bridge_task,
+                "shutdown",
+            );
 
             app_handle.exit(0);
         }
@@ -158,32 +126,66 @@ pub fn run_tauri(config: AppConfig) -> Result<(), tauri::Error> {
                 return;
             }
 
-            event_shutdown.cancel();
-
-            if let Ok(mut guard) = event_bridge_task.lock()
-                && let Some(handle) = guard.take() {
-                    tauri::async_runtime::block_on(async {
-                        let _ = handle.await;
-                    });
-                }
-
-            let disallow_reply = send_control_command(ControlCommand::DisallowUi);
-            match disallow_reply {
-                ControlReply::Ok { message } => {
-                    println!("DisallowUi command acknowledged on UI exit: {message}");
-                }
-                ControlReply::NotRunning { message } => {
-                    eprintln!("DisallowUi on exit: daemon not running: {message}");
-                }
-                ControlReply::Error { message } => {
-                    eprintln!("DisallowUi on exit error: {message}");
-                }
-            }
+            shutdown_ui_bridge_and_disallow(&event_shutdown, &event_bridge_task, "exit");
         }
         _ => {}
     });
 
     Ok(())
+}
+
+fn spawn_ui_bridge_task(
+    app_handle: tauri::AppHandle,
+    ui_sync_port: u16,
+    shutdown: CancellationToken,
+    state_sender: StateSender,
+) -> BridgeTaskHandle {
+    let ws_url = format!("ws://127.0.0.1:{ui_sync_port}");
+    tauri::async_runtime::spawn(async move {
+        let allow_reply = send_control_command(ControlCommand::AllowUi);
+        match allow_reply {
+            ControlReply::Ok { message } => {
+                println!("AllowUi command acknowledged from UI bridge: {message}");
+            }
+            ControlReply::NotRunning { message } => {
+                eprintln!("AllowUi failed (daemon not running): {message}");
+            }
+            ControlReply::Error { message } => {
+                eprintln!("AllowUi command error: {message}");
+            }
+        }
+
+        run_state_bridge_loop(ws_url, app_handle, state_sender, shutdown).await;
+    })
+}
+
+fn shutdown_ui_bridge_and_disallow(
+    shutdown: &CancellationToken,
+    bridge_task: &SharedBridgeTask,
+    phase: &str,
+) {
+    shutdown.cancel();
+
+    if let Ok(mut guard) = bridge_task.lock()
+        && let Some(handle) = guard.take()
+    {
+        tauri::async_runtime::block_on(async {
+            let _ = handle.await;
+        });
+    }
+
+    let disallow_reply = send_control_command(ControlCommand::DisallowUi);
+    match disallow_reply {
+        ControlReply::Ok { message } => {
+            println!("DisallowUi command acknowledged on UI {phase}: {message}");
+        }
+        ControlReply::NotRunning { message } => {
+            eprintln!("DisallowUi on {phase}: daemon not running: {message}");
+        }
+        ControlReply::Error { message } => {
+            eprintln!("DisallowUi on {phase} error: {message}");
+        }
+    }
 }
 
 async fn run_state_bridge_loop(
