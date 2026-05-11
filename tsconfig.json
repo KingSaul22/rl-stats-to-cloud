@@ -13,8 +13,14 @@
     "isolatedModules": true,
     "noEmit": true,
 
-    /* Linting */
+    /* Strict Type Checking */
     "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+    "useUnknownInCatchVariables": true,
+
+    /* Linting */
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true
