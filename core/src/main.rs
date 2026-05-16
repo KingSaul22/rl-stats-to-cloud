@@ -22,10 +22,9 @@ fn main() {
     let config = match config_manager.load_or_create() {
         Ok(config) => config,
         Err(err) => {
+            let config_path = config_manager.path().display();
             eprintln!(
-                "Failed to load config at {}: {}. Falling back to defaults.",
-                config_manager.path().display(),
-                err
+                "Failed to load config at {config_path}: {err}. Falling back to defaults."
             );
             AppConfig::default()
         }

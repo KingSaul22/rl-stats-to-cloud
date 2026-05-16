@@ -2,21 +2,23 @@
   "compilerOptions": {
     "types": ["node", "@tauri-apps/api"],
 
-    "target": "ES2020",
+    "target": "ES2024",
     "useDefineForClassFields": true,
     "module": "ESNext",
-    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "lib": ["ES2024", "DOM", "DOM.Iterable"],
     "skipLibCheck": true,
+    "allowJs": false,
 
     /* Bundler mode */
     "moduleResolution": "bundler",
-    "allowImportingTsExtensions": true,
+    "allowImportingTsExtensions": false,
     "resolveJsonModule": true,
     "isolatedModules": true,
     "noEmit": true,
 
     /* Strict Type Checking */
     "strict": true,
+    "noImplicitThis": true,
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": true,
     "noImplicitOverride": true,
@@ -35,9 +37,13 @@
     // obj['key'] instead of obj.key for types with index signatures.
     "noPropertyAccessFromIndexSignature": true,
 
-    // 3. Ensures that your TypeScript code doesn't rely on features 
-    // that the Tauri WebView (Chrome/WebKit) might not support.
-    "verbatimModuleSyntax": true
+    // 3. Preserves import/export syntax exactly, prevents TS from 
+    // rewriting module syntax, and improves ESM correctness.
+    "verbatimModuleSyntax": true,
+
+    // 4. Ensures all code paths in a function return a value, preventing
+    // bugs where a function might return undefined unexpectedly.
+    "noImplicitReturns": true,
   },
   "include": ["src"]
 }

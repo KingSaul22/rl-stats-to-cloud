@@ -1,14 +1,17 @@
 {
   "rust-analyzer.checkOnSave": true,
   "rust-analyzer.check.command": "clippy",
-  "rust-analyzer.cargo.allTargets": true,
-  // Forward the same arguments you used before
-  "rust-analyzer.cargo.extraArgs": [
+  "rust-analyzer.check.extraArgs": [
     "--all-features",
     "--",
     "-D",
     "warnings"
   ],
+  "rust-analyzer.cargo.allTargets": true,
+  // Forward the same arguments you used before
+  // "rust-analyzer.cargo.extraArgs": [
+  //   "--all-features"
+  // ],
   // (Optional) make the language server always enable diagnostics
   "rust-analyzer.diagnostics.enable": true,
   "chat.tools.terminal.autoApprove": {

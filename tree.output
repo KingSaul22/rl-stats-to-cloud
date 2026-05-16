@@ -1,0 +1,109 @@
+Folder PATH listing
+Volume serial number is 0000001B 841B:4F7E
+C:\USERS\SAUL\SOURCE\REPOS\TFG\RL-STATS-TO-CLOUD-RUST
+|   .gitignore
+|   AGENTS.md
+|   bun.lock
+|   Cargo.lock
+|   Cargo.toml
+|   index.html
+|   package.json
+|   README.md
+|   skills-lock.json
+|   tree.output
+|   tsconfig.json
+|   vite.config.ts
+|                   
++---.vscode
+|       extensions.json
+|       settings.json
+|       
++---core
+|   |   .gitignore
+|   |   Cargo.toml
+|   |   
+|   \---src
+|           config.rs
+|           connector.rs
+|           daemon.rs
+|           firebase.rs
+|           lib.rs
+|           main.rs
+|           worker.rs
+|           
++---dist
+|   |   index.html
+|   |   
+|   \---assets
+|           index-BNNvqGhw.js
+|           index-CuglKeXx.css
+|           
++---docs
+|       firebase-base-schema.json
+|       
++---public
+|       favicon.png
+|       
++---src
+|   |   api.ts
+|   |   constants.ts
+|   |   fixe1.md
+|   |   fixe2.md
+|   |   fixe3.md
+|   |   main.ts
+|   |   main.ts.backup
+|   |   schemas.ts
+|   |   styles.css
+|   |   ui.ts
+|   |   
+|   \---assets
+|           tauri.svg
+|           typescript.svg
+|           vite.svg
+|           
++---src-tauri
+|   |   .gitignore
+|   |   .taurignore
+|   |   build.rs
+|   |   Cargo.lock
+|   |   Cargo.toml
+|   |   clippy.toml
+|   |   deny.toml
+|   |   rustfmt.toml
+|   |   tauri.conf.json
+|   |   
+|   +---capabilities
+|   |       default.json
+|   |       
+|   +---gen
+|   |   \---schemas
+|   |           acl-manifests.json
+|   |           capabilities.json
+|   |           desktop-schema.json
+|   |           windows-schema.json
+|   |           
+|   +---icons
+|   |       128x128.png
+|   |       128x128@2x.png
+|   |       32x32.png
+|   |       icon.icns
+|   |       icon.ico
+|   |       icon.png
+|   |       Square107x107Logo.png
+|   |       Square142x142Logo.png
+|   |       Square150x150Logo.png
+|   |       Square284x284Logo.png
+|   |       Square30x30Logo.png
+|   |       Square310x310Logo.png
+|   |       Square44x44Logo.png
+|   |       Square71x71Logo.png
+|   |       Square89x89Logo.png
+|   |       StoreLogo.png
+|   |       
+|   +---src
+|   |       commands.rs
+|   |       lib.rs
+|   |       main.rs
+|   |       
+|   \---target
+\---target
