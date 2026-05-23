@@ -21,8 +21,11 @@ export const RawAppConfigSchema = z
     reconnect_delay_seconds: z.number().optional(),
     reconnectDelaySeconds: z.number().optional(),
     is_headless: z.boolean().optional(),
+    isHeadless: z.boolean().optional(),
     websocket_url: z.string().optional(),
+    websocketUrl: z.string().optional(),
     ui_sync_port: z.number().optional(),
+    uiSyncPort: z.number().optional(),
   })
   .loose();
 
@@ -92,12 +95,12 @@ export function normalizeAppConfig(raw: unknown): AppConfig {
     throw new Error(`Invalid reconnect delay: ${reconnectDelay}. Must be a positive number.`);
   }
 
-  const isHeadless =
-    typeof validated.is_headless === "boolean" ? validated.is_headless : false;
-  const websocketUrl =
-    typeof validated.websocket_url === "string" ? validated.websocket_url : "ws://localhost:1420";
-  const uiSyncPort =
-    typeof validated.ui_sync_port === "number" ? validated.ui_sync_port : 54321;
+  const isHeadless = 
+    validated.isHeadless ?? validated.is_headless ?? false;
+  const websocketUrl = 
+    validated.websocketUrl ?? validated.websocket_url ?? "ws://localhost:1420";
+  const uiSyncPort = 
+    validated.uiSyncPort ?? validated.ui_sync_port ?? 54321;
 
   return {
     connector: {

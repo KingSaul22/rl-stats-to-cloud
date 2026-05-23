@@ -7,7 +7,6 @@ import type { AppConfig, StatusPayload } from "./schemas";
 
 let saveFeedbackTimer: ReturnType<typeof setTimeout> | undefined;
 
-// DOM elements cached at module initialization
 const DOM: {
   connectionStatus: HTMLElement | null;
   lastEvent: HTMLElement | null;
@@ -18,6 +17,9 @@ const DOM: {
   connectorUrl: HTMLInputElement | null;
   connectorAuthToken: HTMLInputElement | null;
   reconnectDelay: HTMLInputElement | null;
+  websocketUrl: HTMLInputElement | null; // NEW
+  uiSyncPort: HTMLInputElement | null;    // NEW
+  isHeadless: HTMLInputElement | null;    // NEW
 } = {
   connectionStatus: null,
   lastEvent: null,
@@ -28,31 +30,30 @@ const DOM: {
   connectorUrl: null,
   connectorAuthToken: null,
   reconnectDelay: null,
+  websocketUrl: null,
+  uiSyncPort: null,
+  isHeadless: null,
 };
 
 /**
  * Initialize DOM element cache. Call once from DOMContentLoaded.
  */
 export function initializeDOMCache(): void {
-  DOM.connectionStatus = document.querySelector<HTMLElement>(
-    CONSTANTS.UI_SELECTORS.CONNECTION_STATUS
-  );
+  DOM.connectionStatus = document.querySelector<HTMLElement>(CONSTANTS.UI_SELECTORS.CONNECTION_STATUS);
   DOM.lastEvent = document.querySelector<HTMLElement>(CONSTANTS.UI_SELECTORS.LAST_EVENT);
   DOM.configForm = document.querySelector<HTMLFormElement>(CONSTANTS.UI_SELECTORS.CONFIG_FORM);
   DOM.saveButton = document.querySelector<HTMLButtonElement>(CONSTANTS.UI_SELECTORS.SAVE_BUTTON);
   DOM.saveStatus = document.querySelector<HTMLElement>(CONSTANTS.UI_SELECTORS.SAVE_STATUS);
-  DOM.connectorType = document.querySelector<HTMLSelectElement>(
-    CONSTANTS.UI_SELECTORS.CONNECTOR_TYPE
-  );
+  DOM.connectorType = document.querySelector<HTMLSelectElement>(CONSTANTS.UI_SELECTORS.CONNECTOR_TYPE);
   DOM.connectorUrl = document.querySelector<HTMLInputElement>(CONSTANTS.UI_SELECTORS.CONNECTOR_URL);
-  DOM.connectorAuthToken = document.querySelector<HTMLInputElement>(
-    CONSTANTS.UI_SELECTORS.CONNECTOR_AUTH_TOKEN
-  );
-  DOM.reconnectDelay = document.querySelector<HTMLInputElement>(
-    CONSTANTS.UI_SELECTORS.RECONNECT_DELAY
-  );
+  DOM.connectorAuthToken = document.querySelector<HTMLInputElement>(CONSTANTS.UI_SELECTORS.CONNECTOR_AUTH_TOKEN);
+  DOM.reconnectDelay = document.querySelector<HTMLInputElement>(CONSTANTS.UI_SELECTORS.RECONNECT_DELAY);
+  
+  // Directly bind the new IDs added to index.html
+  DOM.websocketUrl = document.querySelector<HTMLInputElement>("#websocket-url");
+  DOM.uiSyncPort = document.querySelector<HTMLInputElement>("#ui-sync-port");
+  DOM.isHeadless = document.querySelector<HTMLInputElement>("#is-headless");
 
-  // Verify all required elements exist
   const missing = Object.entries(DOM)
     .filter(([_k, v]) => v === null)
     .map(([k]) => k);
@@ -78,16 +79,9 @@ export function requiredElement<T extends Element>(selector: string, context = "
 // UI RENDERING FUNCTIONS
 // ============================================================================
 
-/**
- * Render connection state with unified styling.
- * @param state - "connecting" | "connected" | "disconnected"
- */
-export function renderConnectionState(
-  state: "connecting" | "connected" | "disconnected"
-): void {
+export function renderConnectionState(state: "connecting" | "connected" | "disconnected"): void {
   if (!DOM.connectionStatus) return;
 
-  // Remove all status classes
   DOM.connectionStatus.classList.remove(
     CONSTANTS.CSS_CLASSES.STATUS_CONNECTING,
     CONSTANTS.CSS_CLASSES.STATUS_CONNECTED,
@@ -112,9 +106,7 @@ export function renderConnectionState(
 
 function renderLastEvent(lastEvent: string): void {
   if (!DOM.lastEvent) return;
-
-  const normalized = lastEvent.trim() || CONSTANTS.UI_MESSAGES.NONE_EVENT;
-  DOM.lastEvent.textContent = normalized;
+  DOM.lastEvent.textContent = lastEvent.trim() || CONSTANTS.UI_MESSAGES.NONE_EVENT;
 }
 
 export function renderStatus(status: StatusPayload): void {
@@ -126,7 +118,10 @@ export function renderStatus(status: StatusPayload): void {
 }
 
 export function renderConfigForm(config: AppConfig): void {
-  if (!DOM.connectorType || !DOM.connectorUrl || !DOM.connectorAuthToken || !DOM.reconnectDelay) {
+  if (
+    !DOM.connectorType || !DOM.connectorUrl || !DOM.connectorAuthToken || 
+    !DOM.reconnectDelay || !DOM.websocketUrl || !DOM.uiSyncPort || !DOM.isHeadless
+  ) {
     return;
   }
 
@@ -134,27 +129,22 @@ export function renderConfigForm(config: AppConfig): void {
   DOM.connectorUrl.value = config.connector.url;
   DOM.connectorAuthToken.value = config.connector.authToken || "";
   DOM.reconnectDelay.value = String(config.reconnectDelaySeconds);
+  DOM.websocketUrl.value = config.websocketUrl;
+  DOM.uiSyncPort.value = String(config.uiSyncPort);
+  DOM.isHeadless.checked = config.isHeadless;
 }
 
 export function renderSaveMessage(message: string, isSuccess: boolean): void {
   if (!DOM.saveStatus) return;
 
   DOM.saveStatus.textContent = message;
-
-  // Remove existing status classes
   DOM.saveStatus.classList.remove(
     CONSTANTS.CSS_CLASSES.STATUS_CONNECTED,
     CONSTANTS.CSS_CLASSES.STATUS_DISCONNECTED
   );
-
-  // Apply appropriate class
   DOM.saveStatus.classList.add(
-    isSuccess
-      ? CONSTANTS.CSS_CLASSES.STATUS_CONNECTED
-      : CONSTANTS.CSS_CLASSES.STATUS_DISCONNECTED
+    isSuccess ? CONSTANTS.CSS_CLASSES.STATUS_CONNECTED : CONSTANTS.CSS_CLASSES.STATUS_DISCONNECTED
   );
-
-  // Make visible
   DOM.saveStatus.style.opacity = "1";
 }
 
@@ -181,28 +171,31 @@ export function startSaveMessageTimeout(): void {
 // FORM FIELD ACCESS HELPERS
 // ============================================================================
 
-export function getFormValues(): {
-  connectorType: string;
-  connectorUrl: string;
-  connectorAuthToken: string;
-  reconnectDelay: number;
-} | null {
-  if (!DOM.connectorType || !DOM.connectorUrl || !DOM.connectorAuthToken || !DOM.reconnectDelay) {
+/**
+ * Extract clean, typed configuration objects directly from the boundary inputs.
+ */
+export function getFormValues(): AppConfig | null {
+  if (
+    !DOM.connectorType || !DOM.connectorUrl || !DOM.connectorAuthToken || 
+    !DOM.reconnectDelay || !DOM.websocketUrl || !DOM.uiSyncPort || !DOM.isHeadless
+  ) {
     return null;
   }
 
   return {
-    connectorType: DOM.connectorType.value,
-    connectorUrl: DOM.connectorUrl.value,
-    connectorAuthToken: DOM.connectorAuthToken.value,
-    reconnectDelay: Number(DOM.reconnectDelay.value),
+    connector: {
+      type: DOM.connectorType.value,
+      url: DOM.connectorUrl.value.trim(),
+      authToken: DOM.connectorAuthToken.value.trim() || null,
+    },
+    reconnectDelaySeconds: Math.floor(Number(DOM.reconnectDelay.value)),
+    isHeadless: DOM.isHeadless.checked,
+    websocketUrl: DOM.websocketUrl.value.trim(),
+    uiSyncPort: Math.floor(Number(DOM.uiSyncPort.value)),
   };
 }
 
-export function setFormButtonState(
-  disabled: boolean,
-  textContent: string | null
-): void {
+export function setFormButtonState(disabled: boolean, textContent: string | null): void {
   if (!DOM.saveButton) return;
 
   DOM.saveButton.disabled = disabled;
