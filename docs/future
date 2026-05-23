@@ -1,0 +1,58 @@
+This validation audit is highly accurate and provides a clear map of the current engineering landscape. It formally verifies that the structural changes to the telemetry engine successfully eliminated the risk of runaway memory and out-of-order writes. The system has officially transitioned from an unmanaged scripting architecture to a deterministic, multi-lane actor pipeline.
+
+However, as is typical in systems engineering, eliminating the primary bottleneck (resource exhaustion) has exposed the secondary, deeper architectural constraints of the system.
+
+The three remaining critical risks identified in this audit are highly relevant, particularly for an eSports broadcast environment where system freezes are unacceptable.
+
+---
+
+### The New Primary Vulnerability: Cascading Backpressure Stalls
+
+The most significant insight from this new audit is **Critical Issue #3: Historical lane backpressure can turn a sink outage into an ingestion stall.**
+
+Because the data requirements dictate that historical events must *never* be dropped carelessly, the routing loop uses a blocking await to push to the historical queue:
+
+```rust
+send_result = lanes.historical.send(envelope) => { ... }
+
+```
+
+If Firebase suffers an outage or severe latency inflation:
+
+1. The `historical_actor` enters an indefinite loop retrying the failed write.
+2. The `historical` MPSC channel fills up to its `8192` capacity.
+3. Once full, the main routing loop blocks on `lanes.historical.send(envelope).await`.
+4. **The entire ingestion loop freezes.** Because the router is blocked waiting on the historical queue, it can no longer process incoming WebSocket/TCP packets from the game.
+5. As a consequence, the `live_state` watch channel stops updating, and the `event_feed` stops processing. A network glitch on the historical data path accidentally kills the real-time scoreboard and boost tracking.
+
+This cascading failure pattern is an excellent case study for a TFG documentation or defense. It proves you understand how backpressure propagates through bounded distributed systems.
+
+---
+
+### Phase 2 Hardening Plan
+
+To achieve complete system isolation where a cloud outage can never freeze the local user interface or the game ingestion loops, the next targeted refactors should address these exact vulnerabilities.
+
+#### 1. Decoupling the Historical Lane (Isolating the Ingestion Loop)
+
+To prevent the historical queue from blocking the main loop during an outage, the router must switch from an indefinite async block to a non-blocking allocation strategy or an offline buffer.
+
+* **The Surgical Fix:** If the historical MPSC queue is full, rather than blocking the router via `.send().await`, the router can divert the event to an offline disk-backed fallback lane (such as logging the JSON payload to a local append-only file using non-blocking I/O or utilizing a lightweight embedded database like `sled` or `redb`). Once the cloud connection recovers, a background syncer flushes the local file back to the primary sink.
+
+#### 2. Resolving Async Control-Plane Blocking
+
+The audit notes that `daemon.rs` still relies on synchronous `std::io::BufReader::read_line` inside async contexts for local control socket communication.
+
+* **The Surgical Fix:** Convert the local socket control plane to use `tokio::net::TcpListener` and `tokio::io::BufReader` natively. This ensures that when the Tauri UI reads or writes configuration flags to the backend daemon, the operations yield to the Tokio executor instead of seizing the worker thread.
+
+#### 3. Resolving the Tauri Shutdown Path Hang
+
+In `src-tauri/src/lib.rs`, the exit sequence relies on `tauri::async_runtime::block_on` to wait for the background network task to finish. If the connection is dropped or hung at the OS socket level, the desktop window closes but the background process remains hung in memory as a zombie process.
+
+* **The Surgical Fix:** Implement a strict termination deadline. Instead of an open-ended block on the join handle, wrap the execution in a `tokio::time::timeout`. If the tasks do not flush and exit within 2 seconds during a shutdown signal, the handle is explicitly `.abort()`-ed, ensuring a deterministic process exit.
+
+---
+
+### Summary of System State
+
+The current codebase is in a highly professional state: it is panic-free, thread-safe, and memory-bounded. The remaining items are optimizations focused on **fault isolation** and **cancellation safety**—ensuring that failures in one subsystem (Firebase network stability) do not degrade the performance of separate subsystems (the local game capture engine and the Tauri configuration UI).
