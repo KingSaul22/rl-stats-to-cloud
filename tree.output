@@ -1,5 +1,5 @@
 Folder PATH listing
-Volume serial number is 0000001B 841B:4F7E
+Volume serial number is 841B-4F7E
 C:\USERS\SAUL\SOURCE\REPOS\TFG\RL-STATS-TO-CLOUD-RUST
 |   .gitignore
 |   AGENTS.md
@@ -13,7 +13,7 @@ C:\USERS\SAUL\SOURCE\REPOS\TFG\RL-STATS-TO-CLOUD-RUST
 |   tree.output
 |   tsconfig.json
 |   vite.config.ts
-|                   
+|
 +---.vscode
 |       extensions.json
 |       settings.json
@@ -32,6 +32,7 @@ C:\USERS\SAUL\SOURCE\REPOS\TFG\RL-STATS-TO-CLOUD-RUST
 |           worker.rs
 |           
 +---dist
+|   |   favicon.png
 |   |   index.html
 |   |   
 |   \---assets
@@ -40,6 +41,7 @@ C:\USERS\SAUL\SOURCE\REPOS\TFG\RL-STATS-TO-CLOUD-RUST
 |           
 +---docs
 |       firebase-base-schema.json
+|       firebase-base-schema_v2.json
 |       
 +---public
 |       favicon.png
