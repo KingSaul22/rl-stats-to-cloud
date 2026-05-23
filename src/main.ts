@@ -13,6 +13,7 @@ import {
   resetSaveMessageTimeout,
   startSaveMessageTimeout,
   setFormButtonState,
+  getFormValues,
 } from "./ui";
 
 // ============================================================================
@@ -75,50 +76,30 @@ async function handleSaveConfig(event: Event): Promise<void> {
     CONSTANTS.UI_SELECTORS.SAVE_BUTTON,
     "save-button"
   );
-  const typeEl = requiredElement<HTMLSelectElement>(
-    CONSTANTS.UI_SELECTORS.CONNECTOR_TYPE,
-    "connector-type"
-  );
-  const urlEl = requiredElement<HTMLInputElement>(
-    CONSTANTS.UI_SELECTORS.CONNECTOR_URL,
-    "connector-url"
-  );
-  const authEl = requiredElement<HTMLInputElement>(
-    CONSTANTS.UI_SELECTORS.CONNECTOR_AUTH_TOKEN,
-    "connector-auth-token"
-  );
-  const delayEl = requiredElement<HTMLInputElement>(
-    CONSTANTS.UI_SELECTORS.RECONNECT_DELAY,
-    "reconnect-delay"
-  );
-
   const previousButtonLabel = saveBtn.textContent;
   setFormButtonState(true, CONSTANTS.UI_MESSAGES.SAVING);
 
-  const reconnectDelay = Number(delayEl.value);
-  if (!Number.isFinite(reconnectDelay) || reconnectDelay <= 0) {
-    logError("handleSaveConfig", `Invalid reconnect delay: ${reconnectDelay}`);
+  const newConfig = getFormValues();
+
+  if (!newConfig) {
+    logError("handleSaveConfig", "Failed to compile configuration from form UI elements.");
     renderSaveMessage(CONSTANTS.UI_MESSAGES.SAVED_ERROR, false);
     setFormButtonState(false, previousButtonLabel || "Save Configuration");
     return;
   }
 
-  const newConfig: AppConfig = {
-    connector: {
-      type: typeEl.value || CONSTANTS.CONNECTOR_TYPES.FIREBASE,
-      url: urlEl.value.trim(),
-      authToken: authEl.value || null,
-    },
-    reconnectDelaySeconds: Math.floor(reconnectDelay),
-    isHeadless: state.config.isHeadless,
-    websocketUrl: state.config.websocketUrl,
-    uiSyncPort: state.config.uiSyncPort,
-  };
+  // Validate the backoff bounds explicitly
+  if (!Number.isFinite(newConfig.reconnectDelaySeconds) || newConfig.reconnectDelaySeconds <= 0) {
+    logError("handleSaveConfig", `Invalid reconnect delay value: ${newConfig.reconnectDelaySeconds}`);
+    renderSaveMessage(CONSTANTS.UI_MESSAGES.SAVED_ERROR, false);
+    setFormButtonState(false, previousButtonLabel || "Save Configuration");
+    return;
+  }
 
   try {
     await api.saveConfig(newConfig);
     state.config = newConfig;
-    delayEl.value = String(newConfig.reconnectDelaySeconds);
+    renderConfigForm(newConfig); // Refresh visual values
     renderSaveMessage(CONSTANTS.UI_MESSAGES.SAVED_SUCCESS, true);
   } catch (error) {
     logError("handleSaveConfig", error);
@@ -145,13 +126,9 @@ async function registerStatusListener(): Promise<void> {
 
 async function initialize(): Promise<void> {
   try {
-    // Register listener FIRST to avoid race condition
     await registerStatusListener();
-
-    // Show connecting state
     renderConnectionState(CONSTANTS.CONNECTION_STATES.CONNECTING);
 
-    // Load initial state
     await loadConfig();
     await loadStatus();
   } catch (error) {
