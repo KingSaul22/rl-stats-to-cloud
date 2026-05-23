@@ -1,6 +1,4 @@
-mod daemon;
-
-use daemon::{execute_control_command, run_daemon, ControlCommand};
+use rl_stats_core::daemon::{execute_control_command, run_daemon, ControlCommand};
 use rl_stats_core::{default_config_path, AppConfig, ConfigManager};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

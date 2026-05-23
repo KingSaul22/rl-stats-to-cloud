@@ -1,6 +1,9 @@
 pub mod connector;
 pub mod config;
+#[path = "daemon/mod.rs"]
+pub mod daemon;
 pub mod firebase;
+#[path = "worker/mod.rs"]
 pub mod worker;
 
 pub use connector::{connector_factory, EventSink, SinkReceiver, SinkSender};

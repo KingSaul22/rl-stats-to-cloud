@@ -1,0 +1,50 @@
+use crate::{SharedConfig, SharedConfigManager};
+use rl_stats_core::{AppConfig, AppState, StateReceiver};
+
+/// Get the current app configuration from the shared config manager.
+///
+/// # Errors
+/// Returns an error if config loading or creation fails.
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+pub async fn get_config(
+    config: tauri::State<'_, SharedConfigManager>,
+) -> Result<AppConfig, String> {
+    config
+        .load_or_create()
+        .map_err(|err| format!("failed to load config: {err}"))
+}
+
+    /// Persist configuration and update the shared in-memory config snapshot.
+    ///
+    /// # Errors
+    /// Returns an error if save fails or the shared config lock cannot be acquired.
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+pub async fn save_config(
+    config_data: AppConfig,
+    config: tauri::State<'_, SharedConfigManager>,
+    shared_config: tauri::State<'_, SharedConfig>,
+) -> Result<(), String> {
+    config
+        .save(&config_data)
+        .map_err(|err| format!("failed to save config: {err}"))?;
+
+    let mut guard = shared_config
+        .lock()
+        .map_err(|_| "failed to acquire config lock".to_string())?;
+    *guard = config_data;
+    drop(guard);
+
+    Ok(())
+}
+
+/// Retrieve the latest daemon-derived app status.
+///
+/// # Errors
+/// This command currently does not produce runtime errors.
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+pub async fn get_status(state: tauri::State<'_, StateReceiver>) -> Result<AppState, String> {
+    Ok(state.borrow().clone())
+}
