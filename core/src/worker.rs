@@ -4,7 +4,7 @@ use crate::SinkReceiver;
 use crate::StateSender;
 use futures_util::StreamExt;
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{Map, Value};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::io::AsyncReadExt;
@@ -75,6 +75,7 @@ struct IngestEnvelope {
     event_type: String,
     payload: Value,
     class: IngestClass,
+    active_match_id: String,
 }
 
 impl IngestEnvelope {
@@ -85,8 +86,124 @@ impl IngestEnvelope {
             event_type: "__bootstrap__".to_string(),
             payload: Value::Null,
             class: IngestClass::LiveState,
+            active_match_id: String::new(),
         }
     }
+}
+
+#[derive(Debug, Clone)]
+struct SessionContext {
+    active_match_id: String,
+    active_session_id: String,
+    id_source: String,
+}
+
+impl SessionContext {
+    #[must_use]
+    fn new(config_match_id: Option<String>, config_session_id: Option<String>) -> Self {
+        let mut context = Self {
+            active_match_id: String::new(),
+            active_session_id: String::new(),
+            id_source: "Generated".to_string(),
+        };
+
+        if let Some(match_id) = config_match_id
+            && !match_id.is_empty()
+        {
+            context.active_match_id = match_id;
+            context.id_source = "Config".to_string();
+        }
+
+        if let Some(session_id) = config_session_id
+            && !session_id.is_empty()
+        {
+            context.active_session_id = session_id;
+            context.id_source = "Config".to_string();
+        }
+
+        context.ensure_fallback_ids();
+        context
+    }
+
+    fn update_from_payload(&mut self, payload: &Value) {
+        const MATCH_KEYS: &[&str] = &[
+            "match_id",
+            "matchId",
+            "MatchID",
+            "MatchId",
+            "game_id",
+            "gameId",
+            "GameID",
+        ];
+        const SESSION_KEYS: &[&str] = &[
+            "session_id",
+            "sessionId",
+            "SessionID",
+            "SessionId",
+            "game_session_id",
+            "gameSessionId",
+            "GameSessionID",
+        ];
+
+        let telemetry_match_id = Self::extract_identifier(payload, MATCH_KEYS);
+        let telemetry_session_id = Self::extract_identifier(payload, SESSION_KEYS);
+
+        if let Some(match_id) = telemetry_match_id
+            && !match_id.is_empty()
+        {
+            self.active_match_id = match_id;
+            self.id_source = "Telemetry".to_string();
+        }
+
+        if let Some(session_id) = telemetry_session_id
+            && !session_id.is_empty()
+        {
+            self.active_session_id = session_id;
+            self.id_source = "Telemetry".to_string();
+        }
+
+        self.ensure_fallback_ids();
+    }
+
+    fn ensure_fallback_ids(&mut self) {
+        if self.active_match_id.is_empty() {
+            self.active_match_id = Self::generate_fallback_id("match");
+            if self.id_source != "Config" {
+                self.id_source = "Generated".to_string();
+            }
+        }
+
+        if self.active_session_id.is_empty() {
+            self.active_session_id = Self::generate_fallback_id("session");
+            if self.id_source != "Config" {
+                self.id_source = "Generated".to_string();
+            }
+        }
+    }
+
+    #[must_use]
+    fn extract_identifier(payload: &Value, keys: &[&str]) -> Option<String> {
+        keys.iter()
+            .find_map(|key| payload.get(key).and_then(Value::as_str))
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string)
+    }
+
+    #[must_use]
+    fn generate_fallback_id(prefix: &str) -> String {
+        let timestamp_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0_u128, |duration| duration.as_millis());
+        format!("{prefix}_{timestamp_ms}")
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NormalizedPayloadKind {
+    LiveState,
+    EventFeed,
+    Historical,
 }
 
 #[derive(Clone)]
@@ -131,6 +248,7 @@ impl RocketLeagueWorker {
     pub async fn run_until_cancelled(&self, shutdown: CancellationToken) {
         let mut shutdown_logged = false;
         let sink = self.sink_receiver.borrow().clone();
+        let mut session_context = SessionContext::new(None, None);
 
         let (live_state_sender, live_state_receiver) = watch::channel(IngestEnvelope::bootstrap());
         let (event_feed_sender, event_feed_receiver) = mpsc::channel(EVENT_FEED_CAPACITY);
@@ -175,6 +293,7 @@ impl RocketLeagueWorker {
                     &shutdown,
                     &lanes,
                     &mut sequence,
+                    &mut session_context,
                     &mut routing_stats,
                 ) => result,
             };
@@ -231,6 +350,7 @@ impl RocketLeagueWorker {
         shutdown: &CancellationToken,
         lanes: &RoutingLanes,
         sequence: &mut u64,
+        session_context: &mut SessionContext,
         routing_stats: &mut RoutingStats,
     ) -> Result<(), String> {
         if self.websocket_url.starts_with("tcp://") {
@@ -239,6 +359,7 @@ impl RocketLeagueWorker {
                     shutdown,
                     lanes,
                     sequence,
+                    session_context,
                     routing_stats,
                 )
                 .await;
@@ -249,6 +370,7 @@ impl RocketLeagueWorker {
                 shutdown,
                 lanes,
                 sequence,
+                session_context,
                 routing_stats,
             )
             .await
@@ -263,6 +385,7 @@ impl RocketLeagueWorker {
                         shutdown,
                         lanes,
                         sequence,
+                        session_context,
                         routing_stats,
                     )
                     .await
@@ -278,6 +401,7 @@ impl RocketLeagueWorker {
         shutdown: &CancellationToken,
         lanes: &RoutingLanes,
         sequence: &mut u64,
+        session_context: &mut SessionContext,
         routing_stats: &mut RoutingStats,
     ) -> Result<(), String> {
         let (stream, _) = connect_async(&self.websocket_url)
@@ -311,6 +435,7 @@ impl RocketLeagueWorker {
                         shutdown,
                         lanes,
                         sequence,
+                        session_context,
                         routing_stats,
                     )
                     .await?;
@@ -322,6 +447,7 @@ impl RocketLeagueWorker {
                             shutdown,
                             lanes,
                             sequence,
+                            session_context,
                             routing_stats,
                         )
                         .await?;
@@ -350,6 +476,7 @@ impl RocketLeagueWorker {
         shutdown: &CancellationToken,
         lanes: &RoutingLanes,
         sequence: &mut u64,
+        session_context: &mut SessionContext,
         routing_stats: &mut RoutingStats,
     ) -> Result<(), String> {
         let (host, port) = self.resolve_tcp_target()?;
@@ -388,6 +515,7 @@ impl RocketLeagueWorker {
                 shutdown,
                 lanes,
                 sequence,
+                session_context,
                 routing_stats,
             )
             .await?;
@@ -445,6 +573,7 @@ impl RocketLeagueWorker {
         shutdown: &CancellationToken,
         lanes: &RoutingLanes,
         sequence: &mut u64,
+        session_context: &mut SessionContext,
         routing_stats: &mut RoutingStats,
     ) -> Result<(), String> {
         loop {
@@ -463,6 +592,7 @@ impl RocketLeagueWorker {
                         shutdown,
                         lanes,
                         sequence,
+                        session_context,
                         routing_stats,
                     )
                     .await?;
@@ -494,6 +624,7 @@ impl RocketLeagueWorker {
         shutdown: &CancellationToken,
         lanes: &RoutingLanes,
         sequence: &mut u64,
+        session_context: &mut SessionContext,
         routing_stats: &mut RoutingStats,
     ) -> Result<(), String> {
         let parsed: Value = match serde_json::from_str(payload) {
@@ -509,6 +640,7 @@ impl RocketLeagueWorker {
             shutdown,
             lanes,
             sequence,
+            session_context,
             routing_stats,
         )
         .await
@@ -520,6 +652,7 @@ impl RocketLeagueWorker {
         shutdown: &CancellationToken,
         lanes: &RoutingLanes,
         sequence: &mut u64,
+        session_context: &mut SessionContext,
         routing_stats: &mut RoutingStats,
     ) -> Result<(), String> {
         let Some(event_name) = parsed.get("Event").and_then(Value::as_str) else {
@@ -540,14 +673,22 @@ impl RocketLeagueWorker {
             println!("Received JSON with empty Event field.");
             Ok(())
         } else {
+            session_context.update_from_payload(&parsed);
             self.set_last_event(event_name);
             *sequence = sequence.saturating_add(1);
             let class = Self::classify_event(&parsed_event);
+            let payload = Self::normalize_payload(
+                class,
+                &parsed,
+                event_name,
+                session_context,
+            );
             let envelope = IngestEnvelope {
                 seq: *sequence,
                 event_type: event_name.to_string(),
-                payload: parsed,
+                payload,
                 class,
+                active_match_id: session_context.active_match_id.clone(),
             };
 
             self.route_envelope(envelope, shutdown, lanes, routing_stats)
@@ -612,6 +753,379 @@ impl RocketLeagueWorker {
             | RocketLeagueEvent::Save
             | RocketLeagueEvent::Demolition
             | RocketLeagueEvent::Unknown(_) => IngestClass::Historical,
+        }
+    }
+
+    fn normalize_payload(
+        class: IngestClass,
+        raw: &Value,
+        event_type: &str,
+        session_context: &SessionContext,
+    ) -> Value {
+        match Self::normalized_payload_kind(class) {
+            NormalizedPayloadKind::LiveState => Self::normalize_live_state(raw, session_context),
+            NormalizedPayloadKind::EventFeed => {
+                Self::normalize_event_feed(raw, event_type, session_context)
+            }
+            NormalizedPayloadKind::Historical => {
+                Self::normalize_historical(raw, event_type, session_context)
+            }
+        }
+    }
+
+    const fn normalized_payload_kind(class: IngestClass) -> NormalizedPayloadKind {
+        match class {
+            IngestClass::LiveState => NormalizedPayloadKind::LiveState,
+            IngestClass::EventFeed => NormalizedPayloadKind::EventFeed,
+            IngestClass::Historical => NormalizedPayloadKind::Historical,
+        }
+    }
+
+    fn normalize_live_state(raw: &Value, session_context: &SessionContext) -> Value {
+        let time_remaining_seconds = Self::extract_u64_from_keys(
+            raw,
+            &[
+                "time_remaining_seconds",
+                "timeRemainingSeconds",
+                "seconds_remaining",
+                "secondsRemaining",
+                "remaining_seconds",
+                "remainingSeconds",
+                "clock_seconds_remaining",
+                "clockSecondsRemaining",
+            ],
+        )
+        .unwrap_or(0);
+
+        let score = Self::extract_score_object(raw);
+        let player_telemetry = Self::extract_player_telemetry(raw);
+
+        let mut payload = Map::new();
+        payload.insert("is_active".to_string(), Value::Bool(true));
+        payload.insert(
+            "session_id".to_string(),
+            Value::String(session_context.active_session_id.clone()),
+        );
+        payload.insert(
+            "match_id".to_string(),
+            Value::String(session_context.active_match_id.clone()),
+        );
+        payload.insert(
+            "time_remaining_seconds".to_string(),
+            Value::from(time_remaining_seconds),
+        );
+        payload.insert("score".to_string(), score);
+        payload.insert("player_telemetry".to_string(), player_telemetry);
+        Value::Object(payload)
+    }
+
+    fn normalize_event_feed(
+        raw: &Value,
+        event_type: &str,
+        session_context: &SessionContext,
+    ) -> Value {
+        let mut payload = Map::new();
+        payload.insert(
+            "timestamp_ms".to_string(),
+            Value::from(Self::current_timestamp_ms()),
+        );
+        payload.insert(
+            "game_seconds_remaining".to_string(),
+            Value::from(Self::extract_game_seconds_remaining(raw).unwrap_or(0)),
+        );
+        payload.insert(
+            "type".to_string(),
+            Value::String(Self::canonical_event_type(event_type)),
+        );
+        payload.insert(
+            "match_id".to_string(),
+            Value::String(session_context.active_match_id.clone()),
+        );
+        payload.insert(
+            "session_id".to_string(),
+            Value::String(session_context.active_session_id.clone()),
+        );
+
+        if let Some(attacker_id) = Self::extract_string_from_keys(
+            raw,
+            &[
+                "attacker_id",
+                "attackerId",
+                "player_id",
+                "playerId",
+                "scorer_id",
+                "scorerId",
+                "actor_id",
+                "actorId",
+            ],
+        ) {
+            payload.insert("attacker_id".to_string(), Value::String(attacker_id));
+        }
+
+        if let Some(victim_id) = Self::extract_string_from_keys(
+            raw,
+            &[
+                "victim_id",
+                "victimId",
+                "target_id",
+                "targetId",
+                "defender_id",
+                "defenderId",
+            ],
+        ) {
+            payload.insert("victim_id".to_string(), Value::String(victim_id));
+        }
+
+        Value::Object(payload)
+    }
+
+    fn normalize_historical(
+        raw: &Value,
+        event_type: &str,
+        session_context: &SessionContext,
+    ) -> Value {
+        let mut payload = Map::new();
+        payload.insert(
+            "timestamp_ms".to_string(),
+            Value::from(Self::extract_timestamp_ms(raw).unwrap_or_else(Self::current_timestamp_ms)),
+        );
+        payload.insert(
+            "game_seconds_remaining".to_string(),
+            Value::from(Self::extract_game_seconds_remaining(raw).unwrap_or(0)),
+        );
+        payload.insert(
+            "type".to_string(),
+            Value::String(Self::canonical_event_type(event_type)),
+        );
+        payload.insert(
+            "match_id".to_string(),
+            Value::String(session_context.active_match_id.clone()),
+        );
+        payload.insert(
+            "session_id".to_string(),
+            Value::String(session_context.active_session_id.clone()),
+        );
+
+        if let Some(player_id) = Self::extract_string_from_keys(
+            raw,
+            &[
+                "player_id",
+                "playerId",
+                "attacker_id",
+                "attackerId",
+                "scorer_id",
+                "scorerId",
+                "actor_id",
+                "actorId",
+            ],
+        ) {
+            payload.insert("player_id".to_string(), Value::String(player_id));
+        }
+
+        let details = Self::extract_details_object(raw);
+        payload.insert("details".to_string(), details);
+        Value::Object(payload)
+    }
+
+    fn canonical_event_type(event_type: &str) -> String {
+        match event_type {
+            "UpdateState" | "ClockUpdated" | "ClockUpdatedSeconds" => {
+                "live_state".to_string()
+            }
+            "Goal" | "GoalScored" => "goal".to_string(),
+            "Save" | "EpicSave" => "save".to_string(),
+            "Demolition" | "Demo" => "demo".to_string(),
+            other => other.to_ascii_lowercase(),
+        }
+    }
+
+    fn current_timestamp_ms() -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0_u128, |duration| duration.as_millis())
+            .try_into()
+            .map_or(u64::MAX, |value| value)
+    }
+
+    fn extract_timestamp_ms(raw: &Value) -> Option<u64> {
+        Self::extract_u64_from_keys(
+            raw,
+            &[
+                "timestamp_ms",
+                "timestampMs",
+                "TimestampMs",
+                "timestamp",
+                "Timestamp",
+            ],
+        )
+    }
+
+    fn extract_game_seconds_remaining(raw: &Value) -> Option<u64> {
+        Self::extract_u64_from_keys(
+            raw,
+            &[
+                "game_seconds_remaining",
+                "gameSecondsRemaining",
+                "seconds_remaining",
+                "secondsRemaining",
+                "time_remaining_seconds",
+                "timeRemainingSeconds",
+                "remaining_seconds",
+                "remainingSeconds",
+            ],
+        )
+    }
+
+    fn extract_score_object(raw: &Value) -> Value {
+        let blue = Self::extract_u64_from_keys(
+            raw,
+            &[
+                "blue",
+                "blue_score",
+                "blueScore",
+                "score_blue",
+                "scoreBlue",
+            ],
+        )
+        .unwrap_or(0);
+        let orange = Self::extract_u64_from_keys(
+            raw,
+            &[
+                "orange",
+                "orange_score",
+                "orangeScore",
+                "score_orange",
+                "scoreOrange",
+            ],
+        )
+        .unwrap_or(0);
+
+        let mut score = Map::new();
+        score.insert("blue".to_string(), Value::from(blue));
+        score.insert("orange".to_string(), Value::from(orange));
+        Value::Object(score)
+    }
+
+    fn extract_player_telemetry(raw: &Value) -> Value {
+        let mut players = Map::new();
+        Self::collect_player_telemetry(raw, &mut players, None);
+        Value::Object(players)
+    }
+
+    fn collect_player_telemetry(
+        raw: &Value,
+        players: &mut Map<String, Value>,
+        parent_key: Option<&str>,
+    ) {
+        match raw {
+            Value::Object(object) => {
+                let player_id = Self::extract_string_from_keys(
+                    raw,
+                    &[
+                        "player_id",
+                        "playerId",
+                        "id",
+                        "Id",
+                        "unique_id",
+                        "uniqueId",
+                        "steam_id",
+                        "steamId",
+                        "epic_id",
+                        "epicId",
+                    ],
+                )
+                .or_else(|| parent_key.map(ToString::to_string));
+
+                let mut telemetry = Map::new();
+
+                if let Some(boost) = Self::extract_u64_from_keys(raw, &["boost", "Boost"]) {
+                    telemetry.insert("boost".to_string(), Value::from(boost));
+                }
+                if let Some(score) = Self::extract_i64_from_keys(raw, &["score", "Score"]) {
+                    telemetry.insert("score".to_string(), Value::from(score));
+                }
+                if let Some(goals) = Self::extract_u64_from_keys(raw, &["goals", "Goals"]) {
+                    telemetry.insert("goals".to_string(), Value::from(goals));
+                }
+
+                if !telemetry.is_empty()
+                    && let Some(player_id) = player_id
+                {
+                    players.insert(player_id, Value::Object(telemetry));
+                }
+
+                for (key, value) in object {
+                    Self::collect_player_telemetry(value, players, Some(key));
+                }
+            }
+            Value::Array(values) => {
+                for value in values {
+                    Self::collect_player_telemetry(value, players, parent_key);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn extract_details_object(raw: &Value) -> Value {
+        if let Some(details) = raw.get("details")
+            && details.is_object()
+        {
+            return details.clone();
+        }
+
+        let mut details = Map::new();
+
+        if let Some(speed_kph) = Self::extract_u64_from_keys(raw, &["speed_kph", "speedKph"]) {
+            details.insert("speed_kph".to_string(), Value::from(speed_kph));
+        }
+
+        Value::Object(details)
+    }
+
+    fn extract_string_from_keys(raw: &Value, keys: &[&str]) -> Option<String> {
+        Self::find_value_by_keys(raw, keys)
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string)
+    }
+
+    fn extract_u64_from_keys(raw: &Value, keys: &[&str]) -> Option<u64> {
+        Self::find_value_by_keys(raw, keys).and_then(|value| {
+            value
+                .as_u64()
+                .or_else(|| value.as_i64().and_then(|number| u64::try_from(number).ok()))
+                .or_else(|| value.as_str().and_then(|text| text.trim().parse::<u64>().ok()))
+        })
+    }
+
+    fn extract_i64_from_keys(raw: &Value, keys: &[&str]) -> Option<i64> {
+        Self::find_value_by_keys(raw, keys).and_then(|value| {
+            value
+                .as_i64()
+                .or_else(|| value.as_u64().and_then(|number| i64::try_from(number).ok()))
+                .or_else(|| value.as_str().and_then(|text| text.trim().parse::<i64>().ok()))
+        })
+    }
+
+    fn find_value_by_keys<'a>(raw: &'a Value, keys: &[&str]) -> Option<&'a Value> {
+        match raw {
+            Value::Object(object) => {
+                for key in keys {
+                    if let Some(value) = object.get(*key) {
+                        return Some(value);
+                    }
+                }
+
+                object
+                    .values()
+                    .find_map(|value| Self::find_value_by_keys(value, keys))
+            }
+            Value::Array(values) => values
+                .iter()
+                .find_map(|value| Self::find_value_by_keys(value, keys)),
+            _ => None,
         }
     }
 
@@ -728,8 +1242,8 @@ async fn send_with_retry_policy(
             Ok(()) => return,
             Err(SinkError::Terminal { message }) => {
                 eprintln!(
-                    "Sink terminal error [{lane}] seq={} event={} dropped payload: {}",
-                    envelope.seq, envelope.event_type, message
+                    "Sink terminal error [{lane}] seq={} event={} match_id={} dropped payload: {}",
+                    envelope.seq, envelope.event_type, envelope.active_match_id, message
                 );
                 return;
             }
@@ -739,17 +1253,22 @@ async fn send_with_retry_policy(
                     && consecutive_failures > limit
                 {
                     eprintln!(
-                        "Sink retry budget exceeded [{lane}] seq={} event={} failures={} dropped payload: {}",
-                        envelope.seq, envelope.event_type, consecutive_failures, message
+                        "Sink retry budget exceeded [{lane}] seq={} event={} match_id={} failures={} dropped payload: {}",
+                        envelope.seq,
+                        envelope.event_type,
+                        envelope.active_match_id,
+                        consecutive_failures,
+                        message
                     );
                     return;
                 }
 
                 let backoff_delay = calculate_full_jitter_backoff(consecutive_failures);
                 eprintln!(
-                    "Sink transient failure [{lane}] seq={} event={} failures={} retrying_in_ms={} error={}",
+                    "Sink transient failure [{lane}] seq={} event={} match_id={} failures={} retrying_in_ms={} error={}",
                     envelope.seq,
                     envelope.event_type,
+                    envelope.active_match_id,
                     consecutive_failures,
                     backoff_delay.as_millis(),
                     message
@@ -798,14 +1317,14 @@ fn log_sink_failure(lane: &str, envelope: &IngestEnvelope, error: &SinkError) {
     match error {
         SinkError::RateLimited { message } | SinkError::TransientNetwork { message } => {
             eprintln!(
-                "Sink warning [{lane}] seq={} event={} error={} (backoff TODO).",
-                envelope.seq, envelope.event_type, message
+                "Sink warning [{lane}] seq={} event={} match_id={} error={} (backoff TODO).",
+                envelope.seq, envelope.event_type, envelope.active_match_id, message
             );
         }
         SinkError::Terminal { message } => {
             eprintln!(
-                "Sink terminal error [{lane}] seq={} event={} dropped payload: {}",
-                envelope.seq, envelope.event_type, message
+                "Sink terminal error [{lane}] seq={} event={} match_id={} dropped payload: {}",
+                envelope.seq, envelope.event_type, envelope.active_match_id, message
             );
         }
     }
