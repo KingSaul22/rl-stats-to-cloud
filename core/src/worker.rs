@@ -3,9 +3,10 @@ use crate::connector::{SinkError, TelemetrySink};
 use crate::SinkReceiver;
 use crate::StateSender;
 use futures_util::StreamExt;
+use serde::Deserialize;
 use serde_json::Value;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::io::AsyncReadExt;
 use tokio::net::TcpStream;
 use tokio::sync::{mpsc, watch};
@@ -19,13 +20,53 @@ use url::Url;
 type TcpTarget = (String, u16);
 const EVENT_FEED_CAPACITY: usize = 2_048;
 const HISTORICAL_CAPACITY: usize = 8_192;
-const LIVE_STATE_EVENT_NAMES: [&str; 2] = ["UpdateState", "ClockUpdatedSeconds"];
+const RETRY_BACKOFF_BASE_SECONDS: u64 = 1;
+const RETRY_BACKOFF_MAX_SECONDS: u64 = 32;
+const EVENT_FEED_MAX_FAILURES: u32 = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum IngestClass {
     LiveState,
     EventFeed,
     Historical,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RocketLeagueEvent {
+    UpdateState,
+    ClockUpdated,
+    Goal,
+    Save,
+    Demolition,
+    EventFeedMarker,
+    MatchHistoryMarker,
+    Unknown(String),
+}
+
+impl RocketLeagueEvent {
+    #[must_use]
+    fn from_event_name(event_name: String) -> Self {
+        match event_name.as_str() {
+            "UpdateState" => Self::UpdateState,
+            "ClockUpdated" | "ClockUpdatedSeconds" => Self::ClockUpdated,
+            "Goal" | "GoalScored" => Self::Goal,
+            "Save" | "EpicSave" => Self::Save,
+            "Demolition" | "Demo" => Self::Demolition,
+            "EventFeedMarker" => Self::EventFeedMarker,
+            "MatchHistoryMarker" => Self::MatchHistoryMarker,
+            _ => Self::Unknown(event_name),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for RocketLeagueEvent {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let event_name = String::deserialize(deserializer)?;
+        Ok(Self::from_event_name(event_name))
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -481,10 +522,27 @@ impl RocketLeagueWorker {
         sequence: &mut u64,
         routing_stats: &mut RoutingStats,
     ) -> Result<(), String> {
-        if let Some(event_name) = parsed.get("Event").and_then(Value::as_str) {
+        let Some(event_name) = parsed.get("Event").and_then(Value::as_str) else {
+            println!("Received JSON without Event field.");
+            return Ok(());
+        };
+        let parsed_event = match serde_json::from_value::<RocketLeagueEvent>(Value::String(
+            event_name.to_string(),
+        )) {
+            Ok(event) => event,
+            Err(err) => {
+                eprintln!("Failed to parse Event field '{event_name}': {err}");
+                RocketLeagueEvent::Unknown(event_name.to_string())
+            }
+        };
+
+        if event_name.is_empty() {
+            println!("Received JSON with empty Event field.");
+            Ok(())
+        } else {
             self.set_last_event(event_name);
             *sequence = sequence.saturating_add(1);
-            let class = Self::classify_event(event_name, &parsed);
+            let class = Self::classify_event(&parsed_event);
             let envelope = IngestEnvelope {
                 seq: *sequence,
                 event_type: event_name.to_string(),
@@ -494,9 +552,6 @@ impl RocketLeagueWorker {
 
             self.route_envelope(envelope, shutdown, lanes, routing_stats)
                 .await
-        } else {
-            println!("Received JSON without Event field.");
-            Ok(())
         }
     }
 
@@ -545,23 +600,19 @@ impl RocketLeagueWorker {
         }
     }
 
-    fn classify_event(event_name: &str, payload: &Value) -> IngestClass {
-        if LIVE_STATE_EVENT_NAMES.contains(&event_name) {
-            IngestClass::LiveState
-        } else if Self::is_event_feed_marker(event_name, payload) {
-            IngestClass::EventFeed
-        } else {
-            IngestClass::Historical
+    const fn classify_event(event: &RocketLeagueEvent) -> IngestClass {
+        match event {
+            RocketLeagueEvent::UpdateState | RocketLeagueEvent::ClockUpdated => {
+                IngestClass::LiveState
+            }
+            RocketLeagueEvent::EventFeedMarker | RocketLeagueEvent::MatchHistoryMarker => {
+                IngestClass::EventFeed
+            }
+            RocketLeagueEvent::Goal
+            | RocketLeagueEvent::Save
+            | RocketLeagueEvent::Demolition
+            | RocketLeagueEvent::Unknown(_) => IngestClass::Historical,
         }
-    }
-
-    fn is_event_feed_marker(event_name: &str, payload: &Value) -> bool {
-        let lowered = event_name.to_ascii_lowercase();
-        lowered.contains("marker")
-            || lowered.contains("event_feed")
-            || lowered.contains("feed_marker")
-            || payload.get("EventFeedMarker").is_some()
-            || payload.get("MatchHistoryMarker").is_some()
     }
 
     async fn join_actor(actor_name: &str, task: JoinHandle<()>) {
@@ -628,9 +679,13 @@ async fn run_event_feed_actor(
                     break;
                 };
 
-                if let Err(err) = sink.send_event(&envelope.event_type, &envelope.payload).await {
-                    log_sink_failure("event_feed", &envelope, &err);
-                }
+                send_with_retry_policy(
+                    "event_feed",
+                    &envelope,
+                    &sink,
+                    &shutdown,
+                    Some(EVENT_FEED_MAX_FAILURES),
+                ).await;
             }
         }
     }
@@ -649,12 +704,94 @@ async fn run_historical_actor(
                     break;
                 };
 
-                if let Err(err) = sink.send_event(&envelope.event_type, &envelope.payload).await {
-                    log_sink_failure("historical", &envelope, &err);
+                send_with_retry_policy("historical", &envelope, &sink, &shutdown, None).await;
+            }
+        }
+    }
+}
+
+async fn send_with_retry_policy(
+    lane: &str,
+    envelope: &IngestEnvelope,
+    sink: &Arc<dyn TelemetrySink + Send + Sync>,
+    shutdown: &CancellationToken,
+    max_failures: Option<u32>,
+) {
+    let mut consecutive_failures = 0_u32;
+
+    loop {
+        if shutdown.is_cancelled() {
+            return;
+        }
+
+        match sink.send_event(&envelope.event_type, &envelope.payload).await {
+            Ok(()) => return,
+            Err(SinkError::Terminal { message }) => {
+                eprintln!(
+                    "Sink terminal error [{lane}] seq={} event={} dropped payload: {}",
+                    envelope.seq, envelope.event_type, message
+                );
+                return;
+            }
+            Err(SinkError::RateLimited { message } | SinkError::TransientNetwork { message }) => {
+                consecutive_failures = consecutive_failures.saturating_add(1);
+                if let Some(limit) = max_failures
+                    && consecutive_failures > limit
+                {
+                    eprintln!(
+                        "Sink retry budget exceeded [{lane}] seq={} event={} failures={} dropped payload: {}",
+                        envelope.seq, envelope.event_type, consecutive_failures, message
+                    );
+                    return;
+                }
+
+                let backoff_delay = calculate_full_jitter_backoff(consecutive_failures);
+                eprintln!(
+                    "Sink transient failure [{lane}] seq={} event={} failures={} retrying_in_ms={} error={}",
+                    envelope.seq,
+                    envelope.event_type,
+                    consecutive_failures,
+                    backoff_delay.as_millis(),
+                    message
+                );
+
+                tokio::select! {
+                    () = shutdown.cancelled() => return,
+                    () = sleep(backoff_delay) => {}
                 }
             }
         }
     }
+}
+
+fn calculate_full_jitter_backoff(consecutive_failures: u32) -> Duration {
+    let exponent = consecutive_failures.saturating_sub(1).min(5);
+    let max_seconds = RETRY_BACKOFF_BASE_SECONDS
+        .saturating_mul(1_u64 << exponent)
+        .min(RETRY_BACKOFF_MAX_SECONDS);
+    let max_window = Duration::from_secs(max_seconds);
+
+    let max_millis = duration_millis_u64(max_window);
+    let jitter_millis = sample_uniform_jitter_millis(max_millis);
+    Duration::from_millis(jitter_millis)
+}
+
+fn duration_millis_u64(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).map_or(u64::MAX, |value| value)
+}
+
+fn sample_uniform_jitter_millis(max_millis_inclusive: u64) -> u64 {
+    if max_millis_inclusive == 0 {
+        return 0;
+    }
+
+    let epoch_nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0_u128, |duration| duration.as_nanos());
+    let modulus = u128::from(max_millis_inclusive).saturating_add(1);
+    let sampled = epoch_nanos % modulus;
+
+    u64::try_from(sampled).map_or(max_millis_inclusive, |value| value)
 }
 
 fn log_sink_failure(lane: &str, envelope: &IngestEnvelope, error: &SinkError) {
