@@ -1,6 +1,7 @@
-use crate::connector::EventSink;
+use crate::connector::{EventSink, SinkError};
 use async_trait::async_trait;
 use reqwest::Client;
+use reqwest::StatusCode;
 use serde_json::Value;
 
 #[derive(Clone)]
@@ -24,7 +25,7 @@ impl FirebaseConnector {
         }
     }
 
-    async fn push_event(&self, event_type: &str, payload: &Value) {
+    async fn push_event(&self, event_type: &str, payload: &Value) -> Result<(), SinkError> {
         let route = FirebaseRoute::from_event_type(event_type);
         let endpoint = match route {
             FirebaseRoute::LiveState => "live_state".to_string(),
@@ -42,24 +43,26 @@ impl FirebaseConnector {
             FirebaseRoute::MatchEvent => self.http.post(&url),
         };
 
-        let response = request.json(payload).send().await;
-        match response {
-            Ok(resp) => {
-                if !resp.status().is_success() {
-                    eprintln!(
-                        "Firebase push warning: {} returned status {}",
-                        redacted_url,
-                        resp.status()
-                    );
-                }
-            }
-            Err(err) => {
-                let err_message = self.redact_message(&err.to_string());
-                eprintln!(
-                    "Firebase push warning: failed to send to {redacted_url} ({err_message})"
-                );
-            }
+        let response = request.json(payload).send().await.map_err(|err| {
+            let mapped = self.map_reqwest_error(&err);
+            let err_message = self.redact_message(&err.to_string());
+            eprintln!(
+                "Firebase push warning: failed to send to {redacted_url} ({err_message})"
+            );
+            mapped
+        })?;
+
+        if !response.status().is_success() {
+            let mapped = Self::map_status_error(response.status(), &redacted_url);
+            eprintln!(
+                "Firebase push warning: {} returned status {}",
+                redacted_url,
+                response.status()
+            );
+            return Err(mapped);
         }
+
+        Ok(())
     }
 
     fn build_json_url(&self, endpoint_path: &str) -> String {
@@ -92,12 +95,36 @@ impl FirebaseConnector {
 
         output
     }
+
+    fn map_reqwest_error(&self, err: &reqwest::Error) -> SinkError {
+        if let Some(status) = err.status() {
+            return Self::map_status_error(status, &self.redact_message(&err.to_string()));
+        }
+
+        let redacted = self.redact_message(&err.to_string());
+        if err.is_timeout() || err.is_connect() || err.is_request() {
+            SinkError::transient(redacted)
+        } else {
+            SinkError::terminal(redacted)
+        }
+    }
+
+    fn map_status_error(status: StatusCode, context: &str) -> SinkError {
+        let message = format!("{context} (status {status})");
+        if status == StatusCode::TOO_MANY_REQUESTS {
+            SinkError::rate_limited(message)
+        } else if status.is_server_error() {
+            SinkError::transient(message)
+        } else {
+            SinkError::terminal(message)
+        }
+    }
 }
 
 #[async_trait]
 impl EventSink for FirebaseConnector {
-    async fn send_event(&self, event_type: &str, payload: &Value) {
-        self.push_event(event_type, payload).await;
+    async fn send_event(&self, event_type: &str, payload: &Value) -> Result<(), SinkError> {
+        self.push_event(event_type, payload).await
     }
 }
 
