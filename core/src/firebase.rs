@@ -26,21 +26,21 @@ impl FirebaseConnector {
     }
 
     async fn push_event(&self, event_type: &str, payload: &Value) -> Result<(), SinkError> {
+        let match_id = payload
+            .get("match_id")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown_match");
+        let _session_id = payload.get("session_id").and_then(Value::as_str);
+
         let route = FirebaseRoute::from_event_type(event_type);
-        let endpoint = match route {
-            FirebaseRoute::LiveState => "live_state".to_string(),
-            FirebaseRoute::MatchEvent => {
-                let safe_event_type = sanitize_event_type(event_type);
-                format!("match_events/{safe_event_type}")
-            }
-        };
+        let endpoint = route.endpoint_path(match_id);
 
         let url = self.build_json_url(&endpoint);
         let redacted_url = Self::redact_url(&url);
 
         let request = match route {
             FirebaseRoute::LiveState => self.http.put(&url),
-            FirebaseRoute::MatchEvent => self.http.post(&url),
+            FirebaseRoute::EventFeed | FirebaseRoute::Historical => self.http.post(&url),
         };
 
         let response = request.json(payload).send().await.map_err(|err| {
@@ -131,31 +131,27 @@ impl EventSink for FirebaseConnector {
 #[derive(Debug, Clone, Copy)]
 enum FirebaseRoute {
     LiveState,
-    MatchEvent,
+    EventFeed,
+    Historical,
 }
 
 impl FirebaseRoute {
     fn from_event_type(event_type: &str) -> Self {
         match event_type {
-            "UpdateState" | "ClockUpdatedSeconds" => Self::LiveState,
-            _ => Self::MatchEvent,
-        }
-    }
-}
-
-fn sanitize_event_type(event_type: &str) -> String {
-    let mut out = String::with_capacity(event_type.len());
-
-    for ch in event_type.chars() {
-        match ch {
-            '.' | '$' | '#' | '[' | ']' | '/' => out.push('_'),
-            _ => out.push(ch),
+            "UpdateState" | "ClockUpdated" | "ClockUpdatedSeconds" => Self::LiveState,
+            "EventFeedMarker" | "MatchHistoryMarker" => Self::EventFeed,
+            "Goal" | "GoalScored" | "Save" | "EpicSave" | "Demolition" | "Demo" => {
+                Self::Historical
+            }
+            _ => Self::Historical,
         }
     }
 
-    if out.is_empty() {
-        "unknown_event".to_string()
-    } else {
-        out
+    fn endpoint_path(self, match_id: &str) -> String {
+        match self {
+            Self::LiveState => "live_state".to_string(),
+            Self::EventFeed => "live_events_feed".to_string(),
+            Self::Historical => format!("matches_events_history/{match_id}"),
+        }
     }
 }
