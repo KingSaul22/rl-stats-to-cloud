@@ -38,6 +38,18 @@
     "/^cargo clippy -p rl-stats-to-cloud --all-targets --all-features -- -D warnings -D clippy::all -D clippy::pedantic -D clippy::nurserys$/": {
       "approve": true,
       "matchCommandLine": true
+    },
+    "/^cargo check -p rl_stats_core --lib$/": {
+      "approve": true,
+      "matchCommandLine": true
+    },
+    "/^cargo test -p rl_stats_core --lib --no-run$/": {
+      "approve": true,
+      "matchCommandLine": true
+    },
+    "/^cargo clippy --all-targets$/": {
+      "approve": true,
+      "matchCommandLine": true
     }
   }
 }
