@@ -10,8 +10,10 @@ const CONFIG_FILE_NAME: &str = "config.json";
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum ConnectorConfig {
+    #[serde(rename = "Firebase")]
     Firebase {
         url: String,
+        #[serde(rename = "authToken", alias = "auth_token")]
         auth_token: Option<String>,
     },
 }
@@ -26,13 +28,17 @@ impl Default for ConnectorConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AppConfig {
+    #[serde(alias = "is_headless")]
     pub is_headless: bool,
+    #[serde(alias = "websocket_url")]
     pub websocket_url: String,
     #[serde(default)]
     pub connector: ConnectorConfig,
+    #[serde(alias = "reconnect_delay_seconds")]
     pub reconnect_delay_seconds: u64,
-    #[serde(default = "default_ui_sync_port")]
+    #[serde(default = "default_ui_sync_port", alias = "ui_sync_port")]
     pub ui_sync_port: u16,
 }
 

@@ -3,6 +3,7 @@ use async_trait::async_trait;
 use reqwest::Client;
 use reqwest::StatusCode;
 use serde_json::Value;
+use std::time::Duration;
 
 #[derive(Clone)]
 pub struct FirebaseConnector {
@@ -17,11 +18,20 @@ impl FirebaseConnector {
         let auth_token = firebase_auth_token
             .map(|token| token.trim().to_string())
             .filter(|token| !token.is_empty());
+        let http = match Client::builder().timeout(Duration::from_secs(5)).build() {
+            Ok(client) => client,
+            Err(err) => {
+                eprintln!(
+                    "Firebase connector warning: failed to build timed HTTP client ({err}). Falling back to default reqwest client."
+                );
+                Client::new()
+            }
+        };
 
         Self {
             base_url,
             auth_token,
-            http: Client::new(),
+            http,
         }
     }
 

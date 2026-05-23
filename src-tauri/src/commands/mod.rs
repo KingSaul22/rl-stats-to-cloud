@@ -22,18 +22,25 @@ pub async fn get_config(
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)]
 pub async fn save_config(
-    config_data: AppConfig,
+    new_config: AppConfig,
     config: tauri::State<'_, SharedConfigManager>,
     shared_config: tauri::State<'_, SharedConfig>,
 ) -> Result<(), String> {
     config
-        .save(&config_data)
+        .save(&new_config)
         .map_err(|err| format!("failed to save config: {err}"))?;
+
+    // Runtime note: the daemon currently wires sink/transport config at startup.
+    // Frontend flows must trigger a daemon restart mechanism for connector or
+    // websocket URL changes to take effect.
+    println!(
+        "Config saved. A daemon restart is required to apply connector/websocket URL changes."
+    );
 
     let mut guard = shared_config
         .lock()
         .map_err(|_| "failed to acquire config lock".to_string())?;
-    *guard = config_data;
+    *guard = new_config;
     drop(guard);
 
     Ok(())
