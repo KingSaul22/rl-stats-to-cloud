@@ -12,62 +12,114 @@
   <body>
     <main class="app-shell">
       <header class="app-header">
-        <h1>SAVETX - Rocket League Telemetry</h1>
+        <h1>SAVETX Dashboard</h1>
+        <p class="subtitle">Engine Status & Real-time Telemetry Control</p>
       </header>
 
       <section class="panel" aria-labelledby="status-title">
-        <h2 id="status-title">Status</h2>
+        <h2 id="status-title">System Status</h2>
         <div class="status-grid">
-          <p>
-            <span class="label">Connection:</span>
+          <div class="status-item">
+            <span class="label">Core Daemon:</span>
             <span id="connection-status" class="status-chip waiting">Waiting</span>
-          </p>
-          <p>
-            <span class="label">Last Event:</span>
-            <span id="last-event">None</span>
-          </p>
+          </div>
+          <div class="status-item">
+            <span class="label">Last Ingest Event:</span>
+            <span id="last-event" class="event-display">None</span>
+          </div>
         </div>
       </section>
 
       <section class="panel" aria-labelledby="config-title">
-        <h2 id="config-title">Configuration</h2>
+        <h2 id="config-title">Telemetry Engine Profile</h2>
+        
         <form id="config-form" class="config-form" autocomplete="off">
-          <label for="connector-type">Connector Type</label>
-          <select id="connector-type" name="connector_type" required>
-            <option value="Firebase">Firebase RTDB</option>
-          </select>
+          
+          <div class="form-group">
+            <label for="connector-type">Cloud Sink Target</label>
+            <select id="connector-type" name="connectorType" required>
+              <option value="Firebase">Firebase Realtime DB (v2 Layout)</option>
+            </select>
+          </div>
 
-          <label for="connector-url">Database URL</label>
-          <input
-            id="connector-url"
-            name="connector_url"
-            type="text"
-            placeholder="https://your-project.firebaseio.com"
-            autocomplete="url"
-            required
-          />
+          <div class="form-group">
+            <label for="connector-url">Firebase Database URL</label>
+            <input
+              id="connector-url"
+              name="connectorUrl"
+              type="text"
+              placeholder="https://your-project.firebaseio.com"
+              autocomplete="url"
+              required
+            />
+          </div>
 
-          <label for="connector-auth-token">Auth Token</label>
-          <input
-            id="connector-auth-token"
-            name="connector_auth_token"
-            type="password"
-            placeholder="Enter auth token"
-            autocomplete="current-password"
-          />
+          <div class="form-group">
+            <label for="connector-auth-token">Database Auth Token</label>
+            <input
+              id="connector-auth-token"
+              name="connectorAuthToken"
+              type="password"
+              placeholder="Enter database secret or token"
+              autocomplete="current-password"
+            />
+          </div>
 
-          <label for="reconnect-delay-seconds">Reconnect Delay (seconds)</label>
-          <input
-            id="reconnect-delay-seconds"
-            name="reconnect_delay_seconds"
-            type="number"
-            min="1"
-            step="1"
-            required
-          />
+          <hr class="divider" />
+
+          <div class="form-row">
+            <div class="form-group">
+              <label for="websocket-url">Game Plugin Source (WS)</label>
+              <input
+                id="websocket-url"
+                name="websocketUrl"
+                type="text"
+                placeholder="ws://localhost:1420"
+                required
+              />
+            </div>
+
+            <div class="form-group">
+              <label for="ui-sync-port">Internal UI Sync Port</label>
+              <input
+                id="ui-sync-port"
+                name="uiSyncPort"
+                type="number"
+                min="1024"
+                max="65535"
+                placeholder="54321"
+                required
+              />
+            </div>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group">
+              <label for="reconnect-delay-seconds">Network Retry Backoff (seconds)</label>
+              <input
+                id="reconnect-delay-seconds"
+                name="reconnectDelaySeconds"
+                type="number"
+                min="1"
+                step="1"
+                required
+              />
+            </div>
+
+            <div class="form-group checkbox-group">
+              <label class="checkbox-label" for="is-headless">
+                <input
+                  id="is-headless"
+                  name="isHeadless"
+                  type="checkbox"
+                />
+                Run Daemon Headless
+              </label>
+            </div>
+          </div>
 
           <div class="form-actions">
-            <button id="save-config" type="submit">Save Configuration</button>
+            <button id="save-config" type="submit">Apply & Commit Changes</button>
             <span id="save-status" class="save-status" role="status" aria-live="polite"></span>
           </div>
         </form>
