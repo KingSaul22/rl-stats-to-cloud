@@ -1,0 +1,91 @@
+{
+  "metadata": {
+    "current_season": "Season 1",
+    "league_name": "ETX League"
+  },
+
+  "teams": {
+    "team_alpha_id": {
+      "name": "Team Alpha",
+      "logo_url": "https://...",
+      "roster": {
+        "player_1_id": true,
+        "player_2_id": true,
+        "player_3_id": true
+      }
+    }
+  },
+
+  "players": {
+    "player_1_id": {
+      "display_name": "StrikerPro",
+      "platform_id": "Steam_123456789",
+      "team_id": "team_alpha_id"
+    }
+  },
+
+  "matches_index": {
+    "match_101_id": {
+      "timestamp": 1715000000,
+      "blue_team_id": "team_alpha_id",
+      "orange_team_id": "team_beta_id",
+      "status": "completed",
+      "format": "BO5",
+      "winner_id": "team_alpha_id"
+    }
+  },
+
+  "matches_events_history": {
+    "match_101_id": {
+      "event_001": {
+        "timestamp_ms": 1715000120000,
+        "game_seconds_remaining": 280,
+        "type": "goal",
+        "player_id": "player_1_id",
+        "details": {"speed_kph": 105}
+      }
+    }
+  },
+
+  "live_state": {
+    "is_active": true,
+    "session_id": "match_102_id",
+    "time_remaining_seconds": 245,
+    "score": {
+      "blue": 2,
+      "orange": 1
+    },
+    "player_telemetry": {
+      "player_1_id": {
+        "boost": 85,
+        "score": 450,
+        "goals": 1
+      }
+    }
+  },
+
+  "live_events_feed": {
+    "event_001": {
+      "timestamp_ms": 1715000185000,
+      "game_seconds_remaining": 215,
+      "type": "demo",
+      "attacker_id": "player_2_id",
+      "victim_id": "player_4_id"
+    }
+  },
+
+  "stats_cumulative": {
+    "player_1_id": {
+      "goals": 15,
+      "assists": 8,
+      "saves": 12,
+      "mvps": 3
+    },
+    "team_alpha_id": {
+      "wins": 5,
+      "losses": 2,
+      "goals_for": 21,
+      "goals_against": 14
+    }
+  }
+}
