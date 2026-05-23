@@ -18,6 +18,10 @@
     "/^bun run build 2>&1$/": {
       "approve": true,
       "matchCommandLine": true
+    },
+    "/^cargo check -p rl_stats_core$/": {
+      "approve": true,
+      "matchCommandLine": true
     }
   }
 }
