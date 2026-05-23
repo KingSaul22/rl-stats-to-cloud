@@ -1,24 +1,21 @@
 use futures_util::SinkExt;
-use interprocess::local_socket::{
-    prelude::*, GenericNamespaced, Listener as LocalSocketListener,
-    ListenerNonblockingMode, ListenerOptions, Stream as LocalSocketStream,
-};
 use rl_stats_core::{connector_factory, AppConfig, AppState, RocketLeagueWorker, StateReceiver};
 use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader, ErrorKind, Write};
+use std::net::TcpStream as StdTcpStream;
 use std::sync::{
     atomic::{AtomicU64, AtomicUsize, Ordering},
     Arc,
 };
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader as TokioBufReader};
+use tokio::net::tcp::OwnedWriteHalf;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Mutex as AsyncMutex;
 use tokio::task::JoinHandle;
 use tokio_tungstenite::{accept_async, tungstenite::Message, WebSocketStream};
 use tokio_util::sync::CancellationToken;
 
-const CONTROL_SOCKET_BASENAME: &str = "rl_stats_control.sock";
-#[cfg(unix)]
-const CONTROL_SOCKET_FALLBACK_PATH: &str = "/tmp/rl_stats_control.sock";
+const CONTROL_BIND_ADDR: &str = "127.0.0.1:43210";
 const UI_IDLE_AUTO_DISALLOW_SECONDS: u64 = 30;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -35,11 +32,6 @@ enum ControlReply {
     Ok { message: String },
     NotRunning { message: String },
     Error { message: String },
-}
-
-struct DaemonOwnership {
-    listener: LocalSocketListener,
-    endpoint_display: String,
 }
 
 struct DaemonSupervisor {
@@ -66,14 +58,6 @@ pub fn execute_control_command(command: ControlCommand) {
 pub fn run_daemon(config: AppConfig) {
     println!("Starting rl_stats_core daemon...");
 
-    let daemon_ownership = match claim_daemon_ownership() {
-        Ok(ownership) => ownership,
-        Err(err) => {
-            eprintln!("{err}");
-            return;
-        }
-    };
-
     let supervisor = DaemonSupervisor {
         config,
         shutdown: CancellationToken::new(),
@@ -90,21 +74,12 @@ pub fn run_daemon(config: AppConfig) {
         }
     };
 
-    runtime.block_on(supervisor.run(daemon_ownership));
+    runtime.block_on(supervisor.run());
 }
 
 fn send_control_command(command: ControlCommand) -> ControlReply {
     let endpoint_display = control_endpoint_display();
-    let name = match control_socket_name() {
-        Ok(name) => name,
-        Err(err) => {
-            return ControlReply::Error {
-                message: format!("Failed to resolve control endpoint name: {err}"),
-            };
-        }
-    };
-
-    let mut stream = match LocalSocketStream::connect(name) {
+    let mut stream = match StdTcpStream::connect(CONTROL_BIND_ADDR) {
         Ok(stream) => stream,
         Err(err) => {
             return ControlReply::NotRunning {
@@ -179,29 +154,19 @@ fn print_control_reply(command: ControlCommand, reply: &ControlReply) {
     }
 }
 
-fn claim_daemon_ownership() -> Result<DaemonOwnership, String> {
-    let endpoint_display = control_endpoint_display();
-    let name = control_socket_name().map_err(|err| {
-        format!("Failed to resolve control endpoint name {endpoint_display}: {err}")
-    })?;
-
-    ListenerOptions::new()
-        .name(name)
-        .nonblocking(ListenerNonblockingMode::Accept)
-        .create_sync()
-        .map(|listener| DaemonOwnership {
-            listener,
-            endpoint_display: endpoint_display.clone(),
-        })
-        .map_err(|err| {
-            format!(
-                "Another daemon instance appears to be running (failed to bind control endpoint {endpoint_display}): {err}"
-            )
-        })
-}
-
 impl DaemonSupervisor {
-    async fn run(self, daemon_ownership: DaemonOwnership) {
+    async fn run(self) {
+        let endpoint_display = control_endpoint_display();
+        let control_listener = match TcpListener::bind(CONTROL_BIND_ADDR).await {
+            Ok(listener) => listener,
+            Err(err) => {
+                eprintln!(
+                    "Another daemon instance appears to be running (failed to bind control endpoint {endpoint_display}): {err}"
+                );
+                return;
+            }
+        };
+
         let (state_sender, state_receiver) = tokio::sync::watch::channel(AppState::default());
         let ui_control = Arc::new(AsyncMutex::new(UiServerControl {
             bind_addr: format!("127.0.0.1:{}", self.config.ui_sync_port),
@@ -212,7 +177,13 @@ impl DaemonSupervisor {
         let shutdown = self.shutdown.clone();
         let control_ui_control = Arc::clone(&ui_control);
         let control_task = tokio::spawn(async move {
-            run_control_server_loop(daemon_ownership, shutdown, control_ui_control).await;
+            run_control_server_loop(
+                control_listener,
+                endpoint_display,
+                shutdown,
+                control_ui_control,
+            )
+            .await;
         });
 
         let initial_sink = connector_factory(&self.config.connector);
@@ -251,27 +222,36 @@ impl DaemonSupervisor {
 }
 
 async fn run_control_server_loop(
-    ownership: DaemonOwnership,
+    listener: TcpListener,
+    endpoint_display: String,
     shutdown: CancellationToken,
     ui_control: Arc<AsyncMutex<UiServerControl>>,
 ) {
-    println!("Control transport listening on {}", ownership.endpoint_display);
+    println!("Control transport listening on {endpoint_display}");
 
-    while !shutdown.is_cancelled() {
-        match ownership.listener.accept() {
-            Ok(mut stream) => {
-                let reply =
-                    handle_control_connection(&mut stream, &shutdown, &ui_control).await;
-                if let Err(err) = write_control_reply(&mut stream, &reply) {
-                    eprintln!("Failed to send control reply: {err}");
+    loop {
+        tokio::select! {
+            () = shutdown.cancelled() => {
+                break;
+            }
+            accept_result = listener.accept() => {
+                match accept_result {
+                    Ok((stream, _addr)) => {
+                        let connection_shutdown = shutdown.clone();
+                        let connection_ui_control = Arc::clone(&ui_control);
+                        tokio::spawn(async move {
+                            handle_control_connection(
+                                stream,
+                                connection_shutdown,
+                                connection_ui_control,
+                            )
+                            .await;
+                        });
+                    }
+                    Err(err) => {
+                        eprintln!("Control listener accept error: {err}");
+                    }
                 }
-            }
-            Err(err) if err.kind() == ErrorKind::WouldBlock => {
-                tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-            }
-            Err(err) => {
-                eprintln!("Control listener accept error: {err}");
-                tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
             }
         }
     }
@@ -280,38 +260,48 @@ async fn run_control_server_loop(
 }
 
 async fn handle_control_connection(
-    stream: &mut LocalSocketStream,
-    shutdown: &CancellationToken,
-    ui_control: &Arc<AsyncMutex<UiServerControl>>,
-) -> ControlReply {
+    stream: TcpStream,
+    shutdown: CancellationToken,
+    ui_control: Arc<AsyncMutex<UiServerControl>>,
+) {
+    let (read_half, mut write_half) = stream.into_split();
+    let mut reader = TokioBufReader::new(read_half);
     let mut frame = String::new();
-    {
-        let mut reader = BufReader::new(&mut *stream);
-        match reader.read_line(&mut frame) {
-            Ok(0) => {
-                return ControlReply::Error {
-                    message: "Received empty control payload.".to_string(),
-                };
-            }
-            Ok(_) => {}
-            Err(err) => {
-                return ControlReply::Error {
-                    message: format!("Failed to read control command frame: {err}"),
-                };
-            }
+    let read_result = tokio::select! {
+        () = shutdown.cancelled() => {
+            return;
         }
-    }
-
-    let command = match serde_json::from_str::<ControlCommand>(frame.trim_end()) {
-        Ok(command) => command,
-        Err(err) => {
-            return ControlReply::Error {
-                message: format!("Invalid control command payload: {err}"),
-            };
-        }
+        read_result = reader.read_line(&mut frame) => read_result,
     };
 
-    dispatch_control_command(command, shutdown, ui_control).await
+    let reply = match read_result {
+        Ok(0) => ControlReply::Error {
+            message: "Received empty control payload.".to_string(),
+        },
+        Ok(_) => {
+            let command = match serde_json::from_str::<ControlCommand>(frame.trim_end()) {
+                Ok(command) => command,
+                Err(err) => {
+                    let reply = ControlReply::Error {
+                        message: format!("Invalid control command payload: {err}"),
+                    };
+                    if let Err(write_err) = write_control_reply(&mut write_half, &reply).await {
+                        eprintln!("Failed to send control reply: {write_err}");
+                    }
+                    return;
+                }
+            };
+
+            dispatch_control_command(command, &shutdown, &ui_control).await
+        }
+        Err(err) => ControlReply::Error {
+            message: format!("Failed to read control command frame: {err}"),
+        },
+    };
+
+    if let Err(err) = write_control_reply(&mut write_half, &reply).await {
+        eprintln!("Failed to send control reply: {err}");
+    }
 }
 
 async fn dispatch_control_command(
@@ -536,50 +526,16 @@ async fn send_app_state(
         .map_err(|err| format!("Failed to send websocket state update: {err}"))
 }
 
-fn write_control_reply(stream: &mut LocalSocketStream, reply: &ControlReply) -> std::io::Result<()> {
+async fn write_control_reply(stream: &mut OwnedWriteHalf, reply: &ControlReply) -> std::io::Result<()> {
     let payload = serde_json::to_string(reply)
         .map_err(|err| std::io::Error::new(ErrorKind::InvalidData, err.to_string()))?;
-    stream.write_all(payload.as_bytes())?;
-    stream.write_all(b"\n")?;
-    stream.flush()
-}
-
-fn control_socket_name<'a>() -> std::io::Result<interprocess::local_socket::Name<'a>> {
-    if GenericNamespaced::is_supported() {
-        CONTROL_SOCKET_BASENAME.to_ns_name::<GenericNamespaced>()
-    } else {
-        #[cfg(unix)]
-        {
-            CONTROL_SOCKET_FALLBACK_PATH
-                .to_fs_name::<interprocess::local_socket::GenericFilePath>()
-        }
-        #[cfg(not(unix))]
-        {
-            Err(std::io::Error::new(
-                ErrorKind::AddrNotAvailable,
-                "No supported local socket namespace available on this platform.",
-            ))
-        }
-    }
+    stream.write_all(payload.as_bytes()).await?;
+    stream.write_all(b"\n").await?;
+    stream.flush().await
 }
 
 fn control_endpoint_display() -> String {
-    if GenericNamespaced::is_supported() {
-        if cfg!(unix) {
-            format!("@{CONTROL_SOCKET_BASENAME}")
-        } else {
-            format!("\\\\.\\pipe\\{CONTROL_SOCKET_BASENAME}")
-        }
-    } else {
-        #[cfg(unix)]
-        {
-            CONTROL_SOCKET_FALLBACK_PATH.to_string()
-        }
-        #[cfg(not(unix))]
-        {
-            CONTROL_SOCKET_BASENAME.to_string()
-        }
-    }
+    CONTROL_BIND_ADDR.to_string()
 }
 
 #[cfg(test)]

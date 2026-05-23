@@ -1,19 +1,18 @@
 pub mod commands;
 use futures_util::StreamExt;
-use interprocess::local_socket::{
-    prelude::*, GenericNamespaced, Stream as LocalSocketStream,
-};
 use rl_stats_core::{AppConfig, AppState, ConfigManager, StateReceiver, StateSender};
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::io::{BufRead, BufReader, ErrorKind, Write};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex,
 };
 use tauri::{Emitter, Manager};
 use tauri::async_runtime::JoinHandle;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::net::TcpStream;
 use tokio::sync::watch;
+use tokio::time::timeout;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tokio_util::sync::CancellationToken;
 
@@ -22,9 +21,8 @@ pub type SharedConfigManager = Arc<ConfigManager>;
 pub type BridgeTaskHandle = JoinHandle<()>;
 pub type SharedBridgeTask = Arc<Mutex<Option<BridgeTaskHandle>>>;
 
-const CONTROL_SOCKET_BASENAME: &str = "rl_stats_control.sock";
-#[cfg(unix)]
-const CONTROL_SOCKET_FALLBACK_PATH: &str = "/tmp/rl_stats_control.sock";
+const CONTROL_ENDPOINT: &str = "127.0.0.1:43210";
+const CONTROL_IO_TIMEOUT_SECONDS: u64 = 3;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -142,7 +140,7 @@ fn spawn_ui_bridge_task(
 ) -> BridgeTaskHandle {
     let ws_url = format!("ws://127.0.0.1:{ui_sync_port}");
     tauri::async_runtime::spawn(async move {
-        let allow_reply = send_control_command(ControlCommand::AllowUi);
+        let allow_reply = send_control_command(ControlCommand::AllowUi).await;
         match allow_reply {
             ControlReply::Ok { message } => {
                 println!("AllowUi command acknowledged from UI bridge: {message}");
@@ -174,7 +172,9 @@ fn shutdown_ui_bridge_and_disallow(
         });
     }
 
-    let disallow_reply = send_control_command(ControlCommand::DisallowUi);
+    let disallow_reply = tauri::async_runtime::block_on(async {
+        send_control_command(ControlCommand::DisallowUi).await
+    });
     match disallow_reply {
         ControlReply::Ok { message } => {
             println!("DisallowUi command acknowledged on UI {phase}: {message}");
@@ -263,106 +263,76 @@ fn handle_state_message(payload: &str, state_sender: &StateSender, app_handle: &
     }
 }
 
-fn send_control_command(command: ControlCommand) -> ControlReply {
+async fn send_control_command(command: ControlCommand) -> ControlReply {
     let endpoint_display = control_endpoint_display();
-    let name = match control_socket_name() {
-        Ok(name) => name,
-        Err(err) => {
-            return ControlReply::Error {
-                message: format!("Failed to resolve control endpoint name: {err}"),
-            };
-        }
-    };
-
-    let mut stream = match LocalSocketStream::connect(name) {
-        Ok(stream) => stream,
-        Err(err) => {
-            return ControlReply::NotRunning {
-                message: format!("Failed to connect to daemon at {endpoint_display}: {err}"),
-            };
-        }
-    };
-
-    let payload = match serde_json::to_string(&command) {
-        Ok(payload) => payload,
-        Err(err) => {
-            return ControlReply::Error {
-                message: format!("Failed to serialize control command: {err}"),
-            };
-        }
-    };
-
-    if let Err(err) = stream.write_all(payload.as_bytes()) {
-        return ControlReply::Error {
-            message: format!("Failed to send control command payload: {err}"),
-        };
-    }
-    if let Err(err) = stream.write_all(b"\n") {
-        return ControlReply::Error {
-            message: format!("Failed to send control command frame delimiter: {err}"),
-        };
-    }
-    if let Err(err) = stream.flush() {
-        return ControlReply::Error {
-            message: format!("Failed to flush control command stream: {err}"),
-        };
-    }
-
-    let mut reader = BufReader::new(stream);
-    let mut response_line = String::new();
-    match reader.read_line(&mut response_line) {
-        Ok(0) => ControlReply::Error {
-            message: "Daemon closed the control socket without sending a reply.".to_string(),
-        },
-        Ok(_) => {
-            let frame = response_line.trim_end();
-            match serde_json::from_str::<ControlReply>(frame) {
-                Ok(reply) => reply,
-                Err(err) => ControlReply::Error {
-                    message: format!("Failed to decode daemon reply '{frame}': {err}"),
-                },
+    let operation = async {
+        let mut stream = match TcpStream::connect(CONTROL_ENDPOINT).await {
+            Ok(stream) => stream,
+            Err(err) => {
+                return ControlReply::NotRunning {
+                    message: format!("Failed to connect to daemon at {endpoint_display}: {err}"),
+                };
             }
-        }
-        Err(err) => ControlReply::Error {
-            message: format!("Failed to read control reply from daemon: {err}"),
-        },
-    }
-}
+        };
 
-fn control_socket_name<'a>() -> std::io::Result<interprocess::local_socket::Name<'a>> {
-    if GenericNamespaced::is_supported() {
-        CONTROL_SOCKET_BASENAME.to_ns_name::<GenericNamespaced>()
-    } else {
-        #[cfg(unix)]
-        {
-            CONTROL_SOCKET_FALLBACK_PATH
-                .to_fs_name::<interprocess::local_socket::GenericFilePath>()
+        let payload = match serde_json::to_string(&command) {
+            Ok(payload) => payload,
+            Err(err) => {
+                return ControlReply::Error {
+                    message: format!("Failed to serialize control command: {err}"),
+                };
+            }
+        };
+
+        if let Err(err) = stream.write_all(payload.as_bytes()).await {
+            return ControlReply::Error {
+                message: format!("Failed to send control command payload: {err}"),
+            };
         }
-        #[cfg(not(unix))]
-        {
-            Err(std::io::Error::new(
-                ErrorKind::AddrNotAvailable,
-                "No supported local socket namespace available on this platform.",
-            ))
+        if let Err(err) = stream.write_all(b"\n").await {
+            return ControlReply::Error {
+                message: format!("Failed to send control command frame delimiter: {err}"),
+            };
         }
-    }
+        if let Err(err) = stream.flush().await {
+            return ControlReply::Error {
+                message: format!("Failed to flush control command stream: {err}"),
+            };
+        }
+
+        let mut reader = BufReader::new(stream);
+        let mut response_line = String::new();
+        match reader.read_line(&mut response_line).await {
+            Ok(0) => ControlReply::Error {
+                message: "Daemon closed the control socket without sending a reply.".to_string(),
+            },
+            Ok(_) => {
+                let frame = response_line.trim_end();
+                match serde_json::from_str::<ControlReply>(frame) {
+                    Ok(reply) => reply,
+                    Err(err) => ControlReply::Error {
+                        message: format!("Failed to decode daemon reply '{frame}': {err}"),
+                    },
+                }
+            }
+            Err(err) => ControlReply::Error {
+                message: format!("Failed to read control reply from daemon: {err}"),
+            },
+        }
+    };
+
+    timeout(
+        tokio::time::Duration::from_secs(CONTROL_IO_TIMEOUT_SECONDS),
+        operation,
+    )
+    .await
+    .unwrap_or_else(|_| ControlReply::Error {
+            message: format!(
+                "Timed out waiting for daemon control reply after {CONTROL_IO_TIMEOUT_SECONDS}s."
+            ),
+        })
 }
 
 fn control_endpoint_display() -> String {
-    if GenericNamespaced::is_supported() {
-        if cfg!(unix) {
-            format!("@{CONTROL_SOCKET_BASENAME}")
-        } else {
-            format!("\\\\.\\pipe\\{CONTROL_SOCKET_BASENAME}")
-        }
-    } else {
-        #[cfg(unix)]
-        {
-            CONTROL_SOCKET_FALLBACK_PATH.to_string()
-        }
-        #[cfg(not(unix))]
-        {
-            CONTROL_SOCKET_BASENAME.to_string()
-        }
-    }
+    CONTROL_ENDPOINT.to_string()
 }
