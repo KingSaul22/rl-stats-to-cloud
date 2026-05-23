@@ -155,3 +155,53 @@ impl FirebaseRoute {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn taxonomy_maps_clock_variants_to_live_state_route() {
+        for event_type in ["UpdateState", "ClockUpdated", "ClockUpdatedSeconds"] {
+            assert!(matches!(
+                FirebaseRoute::from_event_type(event_type),
+                FirebaseRoute::LiveState
+            ));
+        }
+    }
+
+    #[test]
+    fn historical_route_falls_back_to_unknown_match_path() {
+        assert_eq!(
+            FirebaseRoute::Historical.endpoint_path("unknown_match"),
+            "matches_events_history/unknown_match"
+        );
+    }
+
+    #[test]
+    fn event_feed_routes_to_live_events_feed_path() {
+        assert_eq!(
+            FirebaseRoute::EventFeed.endpoint_path("ignored_match"),
+            "live_events_feed"
+        );
+    }
+
+    #[test]
+    fn route_selection_ignores_missing_match_id_for_unknown_match_fallback_shape() {
+        let payload = json!({
+            "session_id": "session_123"
+        });
+
+        let match_id = payload
+            .get("match_id")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown_match");
+
+        assert_eq!(match_id, "unknown_match");
+        assert_eq!(
+            FirebaseRoute::Historical.endpoint_path(match_id),
+            "matches_events_history/unknown_match"
+        );
+    }
+}

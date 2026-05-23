@@ -1329,3 +1329,147 @@ fn log_sink_failure(lane: &str, envelope: &IngestEnvelope, error: &SinkError) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn taxonomy_maps_clock_variants_to_live_state() {
+        let updates = [
+            RocketLeagueEvent::from_event_name("UpdateState".to_string()),
+            RocketLeagueEvent::from_event_name("ClockUpdated".to_string()),
+            RocketLeagueEvent::from_event_name("ClockUpdatedSeconds".to_string()),
+        ];
+
+        for event in updates {
+            assert!(matches!(RocketLeagueWorker::classify_event(&event), IngestClass::LiveState));
+        }
+    }
+
+    #[test]
+    fn ingress_normalization_produces_v2_live_state_shape() {
+        let session_context = SessionContext::new(
+            Some("match_cfg_1".to_string()),
+            Some("session_cfg_1".to_string()),
+        );
+        let raw = json!({
+            "Event": "UpdateState",
+            "time_remaining_seconds": 123,
+            "blue": 2,
+            "orange": 1,
+            "player_state": {
+                "player_id": "player_1_id",
+                "boost": 85,
+                "score": 450,
+                "goals": 1
+            }
+        });
+
+        let normalized = RocketLeagueWorker::normalize_payload(
+            IngestClass::LiveState,
+            &raw,
+            "UpdateState",
+            &session_context,
+        );
+
+        assert_eq!(normalized.get("is_active"), Some(&Value::Bool(true)));
+        assert_eq!(
+            normalized.get("session_id"),
+            Some(&Value::String("session_cfg_1".to_string()))
+        );
+        assert_eq!(
+            normalized.get("match_id"),
+            Some(&Value::String("match_cfg_1".to_string()))
+        );
+        assert_eq!(normalized.get("time_remaining_seconds"), Some(&Value::from(123_u64)));
+
+        assert!(normalized.get("score").and_then(Value::as_object).is_some());
+        let Some(score) = normalized.get("score").and_then(Value::as_object) else {
+            return;
+        };
+        assert_eq!(score.get("blue"), Some(&Value::from(2_u64)));
+        assert_eq!(score.get("orange"), Some(&Value::from(1_u64)));
+
+        assert!(normalized.get("player_telemetry").and_then(Value::as_object).is_some());
+        let Some(players) = normalized.get("player_telemetry").and_then(Value::as_object) else {
+            return;
+        };
+        assert!(players.get("player_1_id").and_then(Value::as_object).is_some());
+        let Some(player) = players.get("player_1_id").and_then(Value::as_object) else {
+            return;
+        };
+        assert_eq!(player.get("boost"), Some(&Value::from(85_u64)));
+        assert_eq!(player.get("score"), Some(&Value::from(450_i64)));
+        assert_eq!(player.get("goals"), Some(&Value::from(1_u64)));
+    }
+
+    #[test]
+    fn fallback_match_identity_is_generated_and_prefixed() {
+        let mut session_context = SessionContext::new(None, None);
+        let raw = json!({
+            "Event": "Goal",
+            "timestamp_ms": 1_715_000_120_000_u64,
+            "game_seconds_remaining": 280_u64,
+            "details": {"speed_kph": 105_u64}
+        });
+
+        session_context.update_from_payload(&raw);
+
+        assert!(session_context.active_match_id.starts_with("match_"));
+        let suffix = session_context.active_match_id.strip_prefix("match_");
+        assert!(matches!(suffix, Some(value) if !value.is_empty() && value.chars().all(|ch| ch.is_ascii_digit())));
+
+        let normalized = RocketLeagueWorker::normalize_payload(
+            IngestClass::Historical,
+            &raw,
+            "Goal",
+            &session_context,
+        );
+        assert_eq!(
+            normalized.get("match_id"),
+            Some(&Value::String(session_context.active_match_id.clone()))
+        );
+        assert_eq!(
+            normalized.get("session_id"),
+            Some(&Value::String(session_context.active_session_id.clone()))
+        );
+    }
+
+    #[test]
+    fn classify_event_segments_lanes_cleanly() {
+        assert!(matches!(
+            RocketLeagueWorker::classify_event(&RocketLeagueEvent::UpdateState),
+            IngestClass::LiveState
+        ));
+        assert!(matches!(
+            RocketLeagueWorker::classify_event(&RocketLeagueEvent::ClockUpdated),
+            IngestClass::LiveState
+        ));
+        assert!(matches!(
+            RocketLeagueWorker::classify_event(&RocketLeagueEvent::EventFeedMarker),
+            IngestClass::EventFeed
+        ));
+        assert!(matches!(
+            RocketLeagueWorker::classify_event(&RocketLeagueEvent::MatchHistoryMarker),
+            IngestClass::EventFeed
+        ));
+        assert!(matches!(
+            RocketLeagueWorker::classify_event(&RocketLeagueEvent::Goal),
+            IngestClass::Historical
+        ));
+        assert!(matches!(
+            RocketLeagueWorker::classify_event(&RocketLeagueEvent::Save),
+            IngestClass::Historical
+        ));
+        assert!(matches!(
+            RocketLeagueWorker::classify_event(&RocketLeagueEvent::Demolition),
+            IngestClass::Historical
+        ));
+        assert!(matches!(
+            RocketLeagueWorker::classify_event(&RocketLeagueEvent::Unknown("Other".to_string())),
+            IngestClass::Historical
+        ));
+    }
+}
