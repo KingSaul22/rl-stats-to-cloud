@@ -1,4 +1,5 @@
 import { listen } from "@tauri-apps/api/event";
+import { invoke } from "@tauri-apps/api/core"; // for reconnect command (Tauri v2)
 import { CONSTANTS } from "./constants";
 import type { AppConfig, StatusPayload } from "./schemas";
 import { parseStatusPayload } from "./schemas";
@@ -54,6 +55,27 @@ function logError(context: string, error: unknown): void {
 }
 
 // ============================================================================
+// OFFLINE PANEL TOGGLE
+// ============================================================================
+
+function toggleOfflinePanel(connected: boolean): void {
+  const normalView = document.getElementById("normal-view");
+  const offlinePanel = document.getElementById("offline-panel");
+
+  if (!normalView || !offlinePanel) {
+    return; // silent guard if not yet in DOM
+  }
+
+  if (connected) {
+    normalView.style.display = "block";
+    offlinePanel.style.display = "none";
+  } else {
+    normalView.style.display = "none";
+    offlinePanel.style.display = "block";
+  }
+}
+
+// ============================================================================
 // LIFECYCLE & EVENT HANDLERS
 // ============================================================================
 
@@ -66,7 +88,12 @@ async function loadConfig(): Promise<void> {
 async function loadStatus(): Promise<void> {
   const status = await api.getStatus();
   state.status = status;
+  updateUIWithStatus(status);
+}
+
+function updateUIWithStatus(status: StatusPayload): void {
   renderStatus(status);
+  toggleOfflinePanel(status.isConnected);
 }
 
 async function handleSaveConfig(event: Event): Promise<void> {
@@ -88,7 +115,6 @@ async function handleSaveConfig(event: Event): Promise<void> {
     return;
   }
 
-  // Validate the backoff bounds explicitly
   if (!Number.isFinite(newConfig.reconnectDelaySeconds) || newConfig.reconnectDelaySeconds <= 0) {
     logError("handleSaveConfig", `Invalid reconnect delay value: ${newConfig.reconnectDelaySeconds}`);
     renderSaveMessage(CONSTANTS.UI_MESSAGES.SAVED_ERROR, false);
@@ -99,7 +125,7 @@ async function handleSaveConfig(event: Event): Promise<void> {
   try {
     await api.saveConfig(newConfig);
     state.config = newConfig;
-    renderConfigForm(newConfig); // Refresh visual values
+    renderConfigForm(newConfig);
     renderSaveMessage(CONSTANTS.UI_MESSAGES.SAVED_SUCCESS, true);
   } catch (error) {
     logError("handleSaveConfig", error);
@@ -116,7 +142,7 @@ async function registerStatusListener(): Promise<void> {
       try {
         const status = parseStatusPayload(event.payload);
         state.status = status;
-        renderStatus(status);
+        updateUIWithStatus(status);
       } catch (error) {
         logError("registerStatusListener: parseStatusPayload", error);
       }
@@ -145,6 +171,36 @@ function cleanup(): void {
 }
 
 // ============================================================================
+// OFFLINE PANEL BUTTON HANDLERS
+// ============================================================================
+
+function setupOfflinePanelButtons(): void {
+  const reconnectBtn = document.getElementById("reconnect-btn");
+  const configBtn = document.getElementById("offline-config-btn");
+
+  if (reconnectBtn) {
+    reconnectBtn.addEventListener("click", async () => {
+      try {
+        // Replace with your actual Tauri command when ready
+        await invoke("reconnect_daemon");
+      } catch (error) {
+        logError("reconnect_daemon", error);
+      }
+    });
+  }
+
+  if (configBtn) {
+    configBtn.addEventListener("click", () => {
+      // Switch back to normal view and scroll to configuration
+      toggleOfflinePanel(false); // force show config (but we need to show normal view)
+      // Actually we want to show normal view; so call with true and then scroll
+      toggleOfflinePanel(true);
+      document.getElementById("config-title")?.scrollIntoView({ behavior: "smooth" });
+    });
+  }
+}
+
+// ============================================================================
 // FINAL ASSEMBLY & EVENT LISTENERS
 // ============================================================================
 
@@ -157,6 +213,8 @@ window.addEventListener("DOMContentLoaded", () => {
       "config-form"
     );
     formEl.addEventListener("submit", handleSaveConfig);
+
+    setupOfflinePanelButtons();
 
     void initialize();
   } catch (error) {
