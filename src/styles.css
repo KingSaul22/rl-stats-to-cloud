@@ -17,6 +17,17 @@
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+
+  /* Additional tokens for offline panel */
+  --terminal-black: #0a0a0b;
+  --surface-container-low: #1c1b1c;
+  --surface-container-high: #2a2a2b;
+  --on-surface: #e5e2e3;
+  --on-surface-variant: #b9cacb;
+  --status-error: #ff4d4d;
+  --status-warning: #ffb800;
+  --border-subtle: #2d2d30;
+  --error-glow: rgba(255, 77, 77, 0.2);
 }
 
 * {
@@ -163,4 +174,179 @@ button:hover {
   .panel {
     padding: 0.9rem;
   }
+}
+
+/* ==========================================================================
+   OFFLINE PANEL STYLES
+   ========================================================================== */
+
+#offline-panel {
+  background: var(--panel-bg);
+  border: 1px solid var(--panel-border);
+  padding: 2rem;
+  text-align: center;
+  max-width: 560px;
+  margin: 1.5rem auto;
+  color: var(--on-surface, #e5e2e3);
+}
+
+.offline-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1.2rem;
+}
+
+.offline-icon {
+  width: 80px;
+  height: 80px;
+  background: var(--surface-container-high);
+  border: 2px solid var(--status-error);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 0 20px var(--error-glow);
+  animation: offline-pulse 2s infinite;
+}
+
+.offline-icon .material-symbols-outlined {
+  font-size: 40px;
+  color: var(--status-error);
+  font-variation-settings: "FILL" 1;
+}
+
+@keyframes offline-pulse {
+  0% {
+    box-shadow: 0 0 20px var(--error-glow);
+  }
+  50% {
+    box-shadow: 0 0 35px rgba(255, 77, 77, 0.5);
+  }
+  100% {
+    box-shadow: 0 0 20px var(--error-glow);
+  }
+}
+
+.offline-description {
+  max-width: 400px;
+  font-size: 0.95rem;
+  line-height: 1.5;
+  color: var(--on-surface-variant);
+  margin: 0;
+}
+
+.diagnostic-checklist {
+  width: 100%;
+  background: var(--terminal-black);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  padding: 1.2rem;
+  text-align: left;
+}
+
+.diagnostic-checklist h3 {
+  font-family: "JetBrains Mono", "Fira Code", monospace;
+  font-size: 0.8rem;
+  color: var(--on-surface-variant);
+  margin: 0 0 1rem 0;
+  letter-spacing: 0.05em;
+}
+
+.diagnostic-checklist ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.diagnostic-checklist li {
+  display: flex;
+  gap: 0.75rem;
+  background: var(--surface-container-low);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  padding: 0.8rem;
+  align-items: flex-start;
+}
+
+.diagnostic-checklist li .material-symbols-outlined {
+  font-size: 20px;
+  color: var(--status-warning);
+  margin-top: 2px;
+}
+
+.diagnostic-checklist li strong {
+  display: block;
+  font-size: 0.9rem;
+  color: var(--on-surface);
+  margin-bottom: 0.2rem;
+}
+
+.diagnostic-checklist li p {
+  font-size: 0.8rem;
+  color: var(--on-surface-variant);
+  margin: 0;
+}
+
+.offline-actions {
+  display: flex;
+  gap: 1rem;
+  margin-top: 0.5rem;
+}
+
+.btn-reconnect {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: var(--surface-container-high);
+  color: var(--status-error);
+  border: 1px solid var(--status-error);
+  padding: 0.7rem 1.5rem;
+  font-family: inherit;
+  font-weight: 600;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn-reconnect:hover {
+  background: var(--status-error);
+  color: #690005;
+  box-shadow: 0 0 12px rgba(255, 77, 77, 0.4);
+}
+
+.btn-secondary {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: transparent;
+  color: var(--on-surface-variant);
+  border: 1px solid var(--border-subtle);
+  padding: 0.7rem 1.5rem;
+  font-family: inherit;
+  font-weight: 600;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.btn-secondary:hover {
+  background: var(--surface-container-high);
+}
+
+.offline-footer {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  font-family: "JetBrains Mono", "Fira Code", monospace;
+  font-size: 0.75rem;
+  color: var(--on-surface-variant);
+  opacity: 0.7;
+  margin-top: 0.5rem;
+  padding: 0 0.5rem;
 }
