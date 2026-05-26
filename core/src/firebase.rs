@@ -151,7 +151,7 @@ impl FirebaseRoute {
         match event_type {
             "UpdateState" | "ClockUpdated" | "ClockUpdatedSeconds" => Self::LiveState,
             "EventFeedMarker" | "MatchHistoryMarker" => Self::EventFeed,
-            "Goal" | "GoalScored" | "Save" | "EpicSave" | "Demolition" | "Demo" => Self::Historical,
+            //"Goal" | "GoalScored" | "Save" | "EpicSave" | "Demolition" | "Demo" => Self::Historical,
             _ => Self::Historical,
         }
     }
