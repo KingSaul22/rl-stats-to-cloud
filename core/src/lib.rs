@@ -1,16 +1,16 @@
-pub mod connector;
 pub mod config;
+pub mod connector;
 #[path = "daemon/mod.rs"]
 pub mod daemon;
 pub mod firebase;
 #[path = "worker/mod.rs"]
 pub mod worker;
 
-pub use connector::{connector_factory, EventSink, SinkReceiver, SinkSender};
-pub use config::{default_config_path, AppConfig, ConfigManager};
+pub use config::{AppConfig, ConfigManager, default_config_path};
+pub use connector::{EventSink, SinkReceiver, SinkSender, connector_factory};
 pub use firebase::FirebaseConnector;
-pub use worker::RocketLeagueWorker;
 use serde::{Deserialize, Serialize};
+pub use worker::RocketLeagueWorker;
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct AppState {

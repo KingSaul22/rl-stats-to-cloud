@@ -56,9 +56,7 @@ impl FirebaseConnector {
         let response = request.json(payload).send().await.map_err(|err| {
             let mapped = self.map_reqwest_error(&err);
             let err_message = self.redact_message(&err.to_string());
-            eprintln!(
-                "Firebase push warning: failed to send to {redacted_url} ({err_message})"
-            );
+            eprintln!("Firebase push warning: failed to send to {redacted_url} ({err_message})");
             mapped
         })?;
 
@@ -85,16 +83,19 @@ impl FirebaseConnector {
     }
 
     fn redact_url(url: &str) -> String {
-        url.find("auth=").map_or_else(|| url.to_string(), |start| {
-            let token_start = start + "auth=".len();
-            let token_end = url[token_start..]
-                .find('&')
-                .map_or(url.len(), |index| token_start + index);
+        url.find("auth=").map_or_else(
+            || url.to_string(),
+            |start| {
+                let token_start = start + "auth=".len();
+                let token_end = url[token_start..]
+                    .find('&')
+                    .map_or(url.len(), |index| token_start + index);
 
-            let mut redacted = url.to_string();
-            redacted.replace_range(token_start..token_end, "[REDACTED]");
-            redacted
-        })
+                let mut redacted = url.to_string();
+                redacted.replace_range(token_start..token_end, "[REDACTED]");
+                redacted
+            },
+        )
     }
 
     fn redact_message(&self, message: &str) -> String {
@@ -150,9 +151,7 @@ impl FirebaseRoute {
         match event_type {
             "UpdateState" | "ClockUpdated" | "ClockUpdatedSeconds" => Self::LiveState,
             "EventFeedMarker" | "MatchHistoryMarker" => Self::EventFeed,
-            "Goal" | "GoalScored" | "Save" | "EpicSave" | "Demolition" | "Demo" => {
-                Self::Historical
-            }
+            "Goal" | "GoalScored" | "Save" | "EpicSave" | "Demolition" | "Demo" => Self::Historical,
             _ => Self::Historical,
         }
     }

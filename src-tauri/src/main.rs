@@ -1,7 +1,7 @@
 // Prevents additional console window on Windows in release, DO NOT REMOVE!!
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use rl_stats_core::{default_config_path, AppConfig, ConfigManager};
+use rl_stats_core::{AppConfig, ConfigManager, default_config_path};
 
 fn main() {
     let config_manager = ConfigManager::new(default_config_path());

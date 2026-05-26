@@ -77,9 +77,8 @@ impl EventSink for NullSink {
 #[must_use]
 pub fn connector_factory(config: &ConnectorConfig) -> Arc<dyn EventSink + Send + Sync> {
     match config {
-        ConnectorConfig::Firebase { url, auth_token } => Arc::new(FirebaseConnector::new(
-            url.clone(),
-            auth_token.clone(),
-        )),
+        ConnectorConfig::Firebase { url, auth_token } => {
+            Arc::new(FirebaseConnector::new(url.clone(), auth_token.clone()))
+        }
     }
 }

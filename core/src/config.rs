@@ -153,7 +153,7 @@ pub fn default_config_path() -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::{default_ui_sync_port, AppConfig};
+    use super::{AppConfig, default_ui_sync_port};
     use serde_json::Error as JsonError;
 
     #[test]

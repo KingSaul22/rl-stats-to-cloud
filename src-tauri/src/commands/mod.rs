@@ -15,10 +15,10 @@ pub async fn get_config(
         .map_err(|err| format!("failed to load config: {err}"))
 }
 
-    /// Persist configuration and update the shared in-memory config snapshot.
-    ///
-    /// # Errors
-    /// Returns an error if save fails or the shared config lock cannot be acquired.
+/// Persist configuration and update the shared in-memory config snapshot.
+///
+/// # Errors
+/// Returns an error if save fails or the shared config lock cannot be acquired.
 #[tauri::command]
 #[allow(clippy::needless_pass_by_value)]
 pub async fn save_config(

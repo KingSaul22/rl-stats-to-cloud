@@ -1,6 +1,6 @@
-use crate::config::AppConfig;
 use crate::SinkReceiver;
 use crate::StateSender;
+use crate::config::AppConfig;
 use futures_util::StreamExt;
 use serde_json::Value;
 use std::sync::Arc;
@@ -182,24 +182,12 @@ impl RocketLeagueWorker {
     ) -> Result<(), String> {
         if self.websocket_url.starts_with("tcp://") {
             return self
-                .run_raw_tcp_session(
-                    shutdown,
-                    lanes,
-                    sequence,
-                    session_context,
-                    routing_stats,
-                )
+                .run_raw_tcp_session(shutdown, lanes, sequence, session_context, routing_stats)
                 .await;
         }
 
         match self
-            .run_websocket_session(
-                shutdown,
-                lanes,
-                sequence,
-                session_context,
-                routing_stats,
-            )
+            .run_websocket_session(shutdown, lanes, sequence, session_context, routing_stats)
             .await
         {
             Ok(()) => Ok(()),
@@ -615,7 +603,10 @@ mod tests {
         ];
 
         for event in updates {
-            assert!(matches!(RocketLeagueWorker::classify_event(&event), IngestClass::LiveState));
+            assert!(matches!(
+                RocketLeagueWorker::classify_event(&event),
+                IngestClass::LiveState
+            ));
         }
     }
 
@@ -638,7 +629,12 @@ mod tests {
             }
         });
 
-        let normalized = normalize_payload(IngestClass::LiveState, &raw, "UpdateState", &session_context);
+        let normalized = normalize_payload(
+            IngestClass::LiveState,
+            &raw,
+            "UpdateState",
+            &session_context,
+        );
 
         assert_eq!(normalized.get("is_active"), Some(&Value::Bool(true)));
         assert_eq!(
@@ -649,7 +645,10 @@ mod tests {
             normalized.get("match_id"),
             Some(&Value::String("match_cfg_1".to_string()))
         );
-        assert_eq!(normalized.get("time_remaining_seconds"), Some(&Value::from(123_u64)));
+        assert_eq!(
+            normalized.get("time_remaining_seconds"),
+            Some(&Value::from(123_u64))
+        );
 
         assert!(normalized.get("score").and_then(Value::as_object).is_some());
         let Some(score) = normalized.get("score").and_then(Value::as_object) else {
@@ -658,11 +657,24 @@ mod tests {
         assert_eq!(score.get("blue"), Some(&Value::from(2_u64)));
         assert_eq!(score.get("orange"), Some(&Value::from(1_u64)));
 
-        assert!(normalized.get("player_telemetry").and_then(Value::as_object).is_some());
-        let Some(players) = normalized.get("player_telemetry").and_then(Value::as_object) else {
+        assert!(
+            normalized
+                .get("player_telemetry")
+                .and_then(Value::as_object)
+                .is_some()
+        );
+        let Some(players) = normalized
+            .get("player_telemetry")
+            .and_then(Value::as_object)
+        else {
             return;
         };
-        assert!(players.get("player_1_id").and_then(Value::as_object).is_some());
+        assert!(
+            players
+                .get("player_1_id")
+                .and_then(Value::as_object)
+                .is_some()
+        );
         let Some(player) = players.get("player_1_id").and_then(Value::as_object) else {
             return;
         };
@@ -685,7 +697,9 @@ mod tests {
 
         assert!(session_context.active_match_id.starts_with("match_"));
         let suffix = session_context.active_match_id.strip_prefix("match_");
-        assert!(matches!(suffix, Some(value) if !value.is_empty() && value.chars().all(|ch| ch.is_ascii_digit())));
+        assert!(
+            matches!(suffix, Some(value) if !value.is_empty() && value.chars().all(|ch| ch.is_ascii_digit()))
+        );
 
         let normalized = normalize_payload(IngestClass::Historical, &raw, "Goal", &session_context);
         assert_eq!(

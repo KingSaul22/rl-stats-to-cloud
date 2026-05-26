@@ -1,5 +1,5 @@
-use rl_stats_core::daemon::{execute_control_command, run_daemon, ControlCommand};
-use rl_stats_core::{default_config_path, AppConfig, ConfigManager};
+use rl_stats_core::daemon::{ControlCommand, execute_control_command, run_daemon};
+use rl_stats_core::{AppConfig, ConfigManager, default_config_path};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ProcessMode {
@@ -21,9 +21,7 @@ fn main() {
         Ok(config) => config,
         Err(err) => {
             let config_path = config_manager.path().display();
-            eprintln!(
-                "Failed to load config at {config_path}: {err}. Falling back to defaults."
-            );
+            eprintln!("Failed to load config at {config_path}: {err}. Falling back to defaults.");
             AppConfig::default()
         }
     };
