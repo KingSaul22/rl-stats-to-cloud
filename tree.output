@@ -13,7 +13,15 @@ C:\USERS\SAUL\SOURCE\REPOS\TFG\RL-STATS-TO-CLOUD-RUST
 |   tree.output
 |   tsconfig.json
 |   vite.config.ts
+|   
++---.agents
 |
++---.github
+|   \---workflows
+|           ci.yaml
+|           release.yaml
+|           security.yaml
+|           
 +---.vscode
 |       extensions.json
 |       settings.json
@@ -23,25 +31,47 @@ C:\USERS\SAUL\SOURCE\REPOS\TFG\RL-STATS-TO-CLOUD-RUST
 |   |   Cargo.toml
 |   |   
 |   \---src
-|           config.rs
-|           connector.rs
-|           daemon.rs
-|           firebase.rs
-|           lib.rs
-|           main.rs
-|           worker.rs
+|       |   config.rs
+|       |   connector.rs
+|       |   firebase.rs
+|       |   lib.rs
+|       |   main.rs
+|       |   
+|       +---daemon
+|       |       client.rs
+|       |       control.rs
+|       |       mod.rs
+|       |       protocol.rs
+|       |       ui_server.rs
+|       |       
+|       \---worker
+|               actors.rs
+|               context.rs
+|               events.rs
+|               mod.rs
+|               transformer.rs
 |           
 +---dist
 |   |   favicon.png
 |   |   index.html
 |   |   
 |   \---assets
-|           index-BNNvqGhw.js
-|           index-CuglKeXx.css
+|           index-xxxxxxx.js
+|           index-yyyyyyy.css
 |           
 +---docs
-|       firebase-base-schema.json
-|       firebase-base-schema_v2.json
+|   |   architecture.md
+|   |   development.md
+|   |   firebase-base-schema.json
+|   |   firebase-base-schema_v2.json
+|   |   future
+|   |   future2
+|   |   operations.md
+|   |   pipeline.md
+|   |   
+|   +---assets
+|   +---decisions
+|           0001-three-lane-pipeline.md
 |       
 +---public
 |       favicon.png
@@ -103,9 +133,16 @@ C:\USERS\SAUL\SOURCE\REPOS\TFG\RL-STATS-TO-CLOUD-RUST
 |   |       StoreLogo.png
 |   |       
 |   +---src
-|   |       commands.rs
-|   |       lib.rs
-|   |       main.rs
-|   |       
+|   |   |   lib.rs
+|   |   |   main.rs
+|   |   |   
+|   |   +---bridge
+|   |   |       lifecycle.rs
+|   |   |       mod.rs
+|   |   |       transport.rs
+|   |   |       
+|   |   \---commands
+|   |           mod.rs
+|   |           
 |   \---target
 \---target
