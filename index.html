@@ -3,7 +3,6 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="stylesheet" href="/src/styles.css" />
-    <!-- Add Material Symbols for crisp icons (optional but recommended) -->
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&display=swap" />
     <link rel="icon" type="image/png" href="/favicon.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -18,9 +17,10 @@
         <p class="subtitle">Engine Status & Real-time Telemetry Control</p>
       </header>
 
-      <!-- ========== NORMAL OPERATIONS (shown when daemon connected) ========== -->
-      <div id="normal-view">
-        <section class="panel" aria-labelledby="status-title">
+      <!-- ========== STATUS AREA: toggles between normal and offline ========== -->
+      <div id="status-container">
+        <!-- Normal status panel (shown when daemon connected) -->
+        <section id="normal-status-panel" class="panel" aria-labelledby="status-title">
           <h2 id="status-title">System Status</h2>
           <div class="status-grid">
             <div class="status-item">
@@ -34,162 +34,154 @@
           </div>
         </section>
 
-        <section class="panel" aria-labelledby="config-title">
-          <h2 id="config-title">Telemetry Engine Profile</h2>
-          
-          <form id="config-form" class="config-form" autocomplete="off">
-            <div class="form-group">
-              <label for="connector-type">Cloud Sink Target</label>
-              <select id="connector-type" name="connectorType" required>
-                <option value="Firebase">Firebase Realtime DB (v2 Layout)</option>
-              </select>
+        <!-- Offline diagnostics panel (shown when daemon disconnected) -->
+        <div id="offline-panel" class="panel" style="display: none;" aria-labelledby="offline-title">
+          <div class="offline-container">
+            <div class="offline-icon">
+              <span class="material-symbols-outlined">power_off</span>
             </div>
+            <h2 id="offline-title">Core Daemon Disconnected</h2>
+            <p class="offline-description">
+              Telemetry stream halted. The local SAVETX runtime is unresponsive or unable to establish an IPC channel.
+            </p>
+            <div class="diagnostic-checklist">
+              <h3>DIAGNOSTIC CHECKLIST</h3>
+              <ul>
+                <li>
+                  <span class="material-symbols-outlined">pending</span>
+                  <div>
+                    <strong>Check Game Plugin</strong>
+                    <p>Ensure the telemetry plugin is loaded in the target executable (StatsAPI socket active).</p>
+                  </div>
+                </li>
+                <li>
+                  <span class="material-symbols-outlined">settings_ethernet</span>
+                  <div>
+                    <strong>Verify IPC Port</strong>
+                    <p>Confirm that the internal UI sync port (default 54321) is available and not blocked by firewall.</p>
+                  </div>
+                </li>
+                <li>
+                  <span class="material-symbols-outlined">terminal</span>
+                  <div>
+                    <strong>Ensure Daemon Process is Running</strong>
+                    <p>Check if the SAVETX core service is active (e.g., via Task Manager or <code>savetx-core status</code>).</p>
+                  </div>
+                </li>
+              </ul>
+            </div>
+            <div class="offline-actions">
+              <button id="reconnect-btn" class="btn-reconnect">
+                <span class="material-symbols-outlined">sync</span>
+                Reconnect
+              </button>
+              <button id="offline-config-btn" class="btn-secondary">
+                <span class="material-symbols-outlined">settings</span>
+                Configuration
+              </button>
+            </div>
+            <div class="offline-footer">
+              <span>ERR_CODE: DAEMON_UNREACHABLE</span>
+              <span>NODE_STATE: ISOLATED</span>
+            </div>
+          </div>
+        </div>
+      </div>
 
+      <!-- ========== CONFIGURATION (always visible) ========== -->
+      <section class="panel" aria-labelledby="config-title">
+        <h2 id="config-title">Telemetry Engine Profile</h2>
+        
+        <form id="config-form" class="config-form" autocomplete="off">
+          <div class="form-group">
+            <label for="connector-type">Cloud Sink Target</label>
+            <select id="connector-type" name="connectorType" required>
+              <option value="Firebase">Firebase Realtime DB (v2 Layout)</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label for="connector-url">Firebase Database URL</label>
+            <input
+              id="connector-url"
+              name="connectorUrl"
+              type="text"
+              placeholder="https://your-project.firebaseio.com"
+              autocomplete="url"
+              required
+            />
+          </div>
+
+          <div class="form-group">
+            <label for="connector-auth-token">Database Auth Token</label>
+            <input
+              id="connector-auth-token"
+              name="connectorAuthToken"
+              type="password"
+              placeholder="Enter database secret or token"
+              autocomplete="current-password"
+            />
+          </div>
+
+          <hr class="divider" />
+
+          <div class="form-row">
             <div class="form-group">
-              <label for="connector-url">Firebase Database URL</label>
+              <label for="websocket-url">Game Plugin Source (WS)</label>
               <input
-                id="connector-url"
-                name="connectorUrl"
+                id="websocket-url"
+                name="websocketUrl"
                 type="text"
-                placeholder="https://your-project.firebaseio.com"
-                autocomplete="url"
+                placeholder="ws://localhost:1420"
                 required
               />
             </div>
 
             <div class="form-group">
-              <label for="connector-auth-token">Database Auth Token</label>
+              <label for="ui-sync-port">Internal UI Sync Port</label>
               <input
-                id="connector-auth-token"
-                name="connectorAuthToken"
-                type="password"
-                placeholder="Enter database secret or token"
-                autocomplete="current-password"
+                id="ui-sync-port"
+                name="uiSyncPort"
+                type="number"
+                min="1024"
+                max="65535"
+                placeholder="54321"
+                required
+              />
+            </div>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group">
+              <label for="reconnect-delay-seconds">Network Retry Backoff (seconds)</label>
+              <input
+                id="reconnect-delay-seconds"
+                name="reconnectDelaySeconds"
+                type="number"
+                min="1"
+                step="1"
+                required
               />
             </div>
 
-            <hr class="divider" />
-
-            <div class="form-row">
-              <div class="form-group">
-                <label for="websocket-url">Game Plugin Source (WS)</label>
+            <div class="form-group checkbox-group">
+              <label class="checkbox-label" for="is-headless">
                 <input
-                  id="websocket-url"
-                  name="websocketUrl"
-                  type="text"
-                  placeholder="ws://localhost:1420"
-                  required
+                  id="is-headless"
+                  name="isHeadless"
+                  type="checkbox"
                 />
-              </div>
-
-              <div class="form-group">
-                <label for="ui-sync-port">Internal UI Sync Port</label>
-                <input
-                  id="ui-sync-port"
-                  name="uiSyncPort"
-                  type="number"
-                  min="1024"
-                  max="65535"
-                  placeholder="54321"
-                  required
-                />
-              </div>
+                Run Daemon Headless
+              </label>
             </div>
-
-            <div class="form-row">
-              <div class="form-group">
-                <label for="reconnect-delay-seconds">Network Retry Backoff (seconds)</label>
-                <input
-                  id="reconnect-delay-seconds"
-                  name="reconnectDelaySeconds"
-                  type="number"
-                  min="1"
-                  step="1"
-                  required
-                />
-              </div>
-
-              <div class="form-group checkbox-group">
-                <label class="checkbox-label" for="is-headless">
-                  <input
-                    id="is-headless"
-                    name="isHeadless"
-                    type="checkbox"
-                  />
-                  Run Daemon Headless
-                </label>
-              </div>
-            </div>
-
-            <div class="form-actions">
-              <button id="save-config" type="submit">Apply & Commit Changes</button>
-              <span id="save-status" class="save-status" role="status" aria-live="polite"></span>
-            </div>
-          </form>
-        </section>
-      </div>
-
-      <!-- ========== OFFLINE DIAGNOSTIC PANEL (shown when daemon disconnected) ========== -->
-      <div id="offline-panel" class="panel" style="display: none;" aria-labelledby="offline-title">
-        <div class="offline-container">
-          <!-- Status Icon -->
-          <div class="offline-icon">
-            <span class="material-symbols-outlined">power_off</span>
           </div>
 
-          <h2 id="offline-title">Core Daemon Disconnected</h2>
-          <p class="offline-description">
-            Telemetry stream halted. The local SAVETX runtime is unresponsive or unable to establish an IPC channel.
-          </p>
-
-          <!-- Diagnostic Checklist -->
-          <div class="diagnostic-checklist">
-            <h3>DIAGNOSTIC CHECKLIST</h3>
-            <ul>
-              <li>
-                <span class="material-symbols-outlined">pending</span>
-                <div>
-                  <strong>Check Game Plugin</strong>
-                  <p>Ensure the telemetry plugin is loaded in the target executable (StatsAPI socket active).</p>
-                </div>
-              </li>
-              <li>
-                <span class="material-symbols-outlined">settings_ethernet</span>
-                <div>
-                  <strong>Verify IPC Port</strong>
-                  <p>Confirm that the internal UI sync port (default 54321) is available and not blocked by firewall.</p>
-                </div>
-              </li>
-              <li>
-                <span class="material-symbols-outlined">terminal</span>
-                <div>
-                  <strong>Ensure Daemon Process is Running</strong>
-                  <p>Check if the SAVETX core service is active (e.g., via Task Manager or <code>savetx-core status</code>).</p>
-                </div>
-              </li>
-            </ul>
+          <div class="form-actions">
+            <button id="save-config" type="submit">Apply & Commit Changes</button>
+            <span id="save-status" class="save-status" role="status" aria-live="polite"></span>
           </div>
-
-          <!-- Action Buttons -->
-          <div class="offline-actions">
-            <button id="reconnect-btn" class="btn-reconnect">
-              <span class="material-symbols-outlined">sync</span>
-              Reconnect
-            </button>
-            <button id="offline-config-btn" class="btn-secondary">
-              <span class="material-symbols-outlined">settings</span>
-              Configuration
-            </button>
-          </div>
-
-          <!-- Footer information -->
-          <div class="offline-footer">
-            <span>ERR_CODE: DAEMON_UNREACHABLE</span>
-            <span>NODE_STATE: ISOLATED</span>
-          </div>
-        </div>
-      </div>
-
+        </form>
+      </section>
     </main>
   </body>
 </html>

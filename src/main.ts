@@ -1,5 +1,5 @@
 import { listen } from "@tauri-apps/api/event";
-import { invoke } from "@tauri-apps/api/core"; // for reconnect command (Tauri v2)
+import { invoke } from "@tauri-apps/api/core"; // Tauri v2
 import { CONSTANTS } from "./constants";
 import type { AppConfig, StatusPayload } from "./schemas";
 import { parseStatusPayload } from "./schemas";
@@ -55,22 +55,20 @@ function logError(context: string, error: unknown): void {
 }
 
 // ============================================================================
-// OFFLINE PANEL TOGGLE
+// OFFLINE PANEL TOGGLE (only status area)
 // ============================================================================
 
 function toggleOfflinePanel(connected: boolean): void {
-  const normalView = document.getElementById("normal-view");
+  const normalStatus = document.getElementById("normal-status-panel");
   const offlinePanel = document.getElementById("offline-panel");
 
-  if (!normalView || !offlinePanel) {
-    return; // silent guard if not yet in DOM
-  }
+  if (!normalStatus || !offlinePanel) return;
 
   if (connected) {
-    normalView.style.display = "block";
+    normalStatus.style.display = "block";
     offlinePanel.style.display = "none";
   } else {
-    normalView.style.display = "none";
+    normalStatus.style.display = "none";
     offlinePanel.style.display = "block";
   }
 }
@@ -181,7 +179,7 @@ function setupOfflinePanelButtons(): void {
   if (reconnectBtn) {
     reconnectBtn.addEventListener("click", async () => {
       try {
-        // Replace with your actual Tauri command when ready
+        // TODO: implement `reconnect_daemon` Tauri command in Rust
         await invoke("reconnect_daemon");
       } catch (error) {
         logError("reconnect_daemon", error);
@@ -191,10 +189,7 @@ function setupOfflinePanelButtons(): void {
 
   if (configBtn) {
     configBtn.addEventListener("click", () => {
-      // Switch back to normal view and scroll to configuration
-      toggleOfflinePanel(false); // force show config (but we need to show normal view)
-      // Actually we want to show normal view; so call with true and then scroll
-      toggleOfflinePanel(true);
+      // Config is always visible; just scroll to it smoothly
       document.getElementById("config-title")?.scrollIntoView({ behavior: "smooth" });
     });
   }
