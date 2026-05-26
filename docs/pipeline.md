@@ -3,17 +3,63 @@
 The ingestion pipeline is a five-stage, multi-lane architecture designed to prevent slow or failing
 sinks from blocking time-sensitive telemetry.
 
+## Data Flow
+
+```
+                         ┌──────────────────────┐
+                         │     Worker           │
+                         │  (session loop,      │
+                         │   auto-reconnect)    │
+                         └──────────┬───────────┘
+                                    │
+                                    ▼
+                         ┌──────────────────────┐
+                         │   Classification     │
+                         │  (event → lane map)  │
+                         │                      │
+                         │  UpdateState    ─────┼───► LiveState  │
+                         │  ClockUpdated   ─────┤               │
+                         │                      │               │
+                         │  EventFeedMarker ────┼───► EventFeed │
+                         │  MatchHistoryMarker──┤               │
+                         │  Unknown        ─────┤               │
+                         │                      │               │
+                         │  Goal           ─────┼───►Historical │
+                         │  Save           ─────┤               │
+                         │  Demolition     ─────┤               │
+                         └──────────┬───────────┘               │
+                                    │                            │
+                    ┌───────────────┼───────────────┐            │
+                    ▼               ▼               ▼            │
+              ┌──────────┐  ┌──────────────┐  ┌──────────┐      │
+              │LiveState │  │  EventFeed   │  │Historical│      │
+              │  watch   │  │ mpsc(2048)   │  │mpsc(8192)│      │
+              │          │  │  try_send    │  │send.await│      │
+              └────┬─────┘  └──────┬───────┘  └────┬─────┘      │
+                   │               │               │            │
+                   ▼               ▼               ▼            │
+              ┌──────────┐  ┌──────────────┐  ┌──────────┐      │
+              │  Sink    │  │    Sink      │  │  Sink    │      │
+              │ Best-eff.│  │ max 3 retry  │  │∞ retry   │      │
+              └────┬─────┘  └──────┬───────┘  └────┬─────┘      │
+                   │               │               │            │
+                   ▼               ▼               ▼            │
+              ┌───────────────────────────────────────────┐     │
+              │              Firebase Realtime DB          │─────┘
+              └───────────────────────────────────────────┘
+```
+
 ## Stage 1: Ingestion
 
-The Ingestion Engine opens a persistent connection to `websocketUrl` (default `ws://127.0.0.1:49123`).
+The Worker opens a persistent connection to `websocketUrl` (default `ws://127.0.0.1:49123`).
 Two transport modes are supported:
 
 | Mode | Detection | Parser |
 |------|-----------|--------|
 | WebSocket | Default | `tokio-tungstenite` |
-| TCP (raw) | Fallback on HTTP parse error | Line-delimited JSON stream (512 KB bounded buffer) |
+| TCP (raw) | Fallback on HTTP parse error | Line-delimited JSON stream |
 
-On connection loss, the engine sleeps for `reconnectDelaySeconds` (default 5) and retries
+On connection loss, the Worker sleeps for `reconnectDelaySeconds` (default 5) and retries
 indefinitely. Connection state changes are broadcast to the `state_sender` watch channel,
 which feeds both the UI Sync Server and the LiveState sink.
 
@@ -98,9 +144,9 @@ for attempt in 0.. {
 }
 ```
 
-The jitter uses nanosecond-precision randomness to avoid thundering-herd effects. A `Terminal` error
-(schema mismatch, auth failure) causes immediate drop with no retry. A `RateLimited` error backs off
-by an extra second. A `TransientNetwork` error follows the standard backoff schedule.
+A `Terminal` error (schema mismatch, auth failure) causes immediate drop with no retry.
+A `RateLimited` error backs off by an extra second. A `TransientNetwork` error follows the
+standard backoff schedule.
 
 ## Reliability Guarantees
 
