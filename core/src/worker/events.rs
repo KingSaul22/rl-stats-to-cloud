@@ -15,6 +15,8 @@ pub enum RocketLeagueEvent {
     Goal,
     Save,
     Demolition,
+    GoalReplayStart,
+    GoalReplayEnd,
     EventFeedMarker,
     MatchHistoryMarker,
     Unknown(String),
@@ -29,6 +31,8 @@ impl RocketLeagueEvent {
             "Goal" | "GoalScored" => Self::Goal,
             "Save" | "EpicSave" => Self::Save,
             "Demolition" | "Demo" => Self::Demolition,
+            "GoalReplayStart" => Self::GoalReplayStart,
+            "GoalReplayEnd" | "GoalReplayWillEnd" => Self::GoalReplayEnd,
             "EventFeedMarker" => Self::EventFeedMarker,
             "MatchHistoryMarker" => Self::MatchHistoryMarker,
             _ => Self::Unknown(event_name),
@@ -77,6 +81,22 @@ mod tests {
         assert_eq!(
             RocketLeagueEvent::from_event_name("GoalScored".to_string()),
             RocketLeagueEvent::Goal
+        );
+    }
+
+    #[test]
+    fn from_event_name_maps_replay_events() {
+        assert_eq!(
+            RocketLeagueEvent::from_event_name("GoalReplayStart".to_string()),
+            RocketLeagueEvent::GoalReplayStart
+        );
+        assert_eq!(
+            RocketLeagueEvent::from_event_name("GoalReplayEnd".to_string()),
+            RocketLeagueEvent::GoalReplayEnd
+        );
+        assert_eq!(
+            RocketLeagueEvent::from_event_name("GoalReplayWillEnd".to_string()),
+            RocketLeagueEvent::GoalReplayEnd
         );
     }
 }

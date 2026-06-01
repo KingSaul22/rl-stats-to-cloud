@@ -6,6 +6,7 @@ pub struct SessionContext {
     pub(crate) active_match_id: String,
     pub(crate) active_session_id: String,
     pub(crate) id_source: String,
+    pub(crate) in_replay: bool,
 }
 
 impl SessionContext {
@@ -15,6 +16,7 @@ impl SessionContext {
             active_match_id: String::new(),
             active_session_id: String::new(),
             id_source: "Generated".to_string(),
+            in_replay: false,
         };
 
         if let Some(match_id) = config_match_id
