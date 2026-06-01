@@ -50,6 +50,10 @@
     "/^cargo clippy --all-targets$/": {
       "approve": true,
       "matchCommandLine": true
+    },
+    "/^cargo test -p rl_stats_core firebase::tests$/": {
+      "approve": true,
+      "matchCommandLine": true
     }
   }
 }
