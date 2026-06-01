@@ -37,7 +37,16 @@ impl SessionContext {
 
     pub(crate) fn update_from_payload(&mut self, payload: &Value) {
         const MATCH_KEYS: &[&str] = &[
-            "match_id", "matchId", "MatchID", "MatchId", "game_id", "gameId", "GameID",
+            "MatchGuid",
+            "match_guid",
+            "matchGuid",
+            "match_id",
+            "matchId",
+            "MatchID",
+            "MatchId",
+            "game_id",
+            "gameId",
+            "GameID",
         ];
         const SESSION_KEYS: &[&str] = &[
             "session_id",
@@ -87,11 +96,30 @@ impl SessionContext {
 
     #[must_use]
     pub(crate) fn extract_identifier(payload: &Value, keys: &[&str]) -> Option<String> {
-        keys.iter()
-            .find_map(|key| payload.get(key).and_then(Value::as_str))
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToString::to_string)
+        Self::find_identifier(payload, keys)
+    }
+
+    fn find_identifier(payload: &Value, keys: &[&str]) -> Option<String> {
+        match payload {
+            Value::Object(object) => {
+                let direct = keys
+                    .iter()
+                    .find_map(|key| object.get(*key).and_then(Value::as_str))
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(ToString::to_string);
+
+                direct.or_else(|| {
+                    object
+                        .values()
+                        .find_map(|value| Self::find_identifier(value, keys))
+                })
+            }
+            Value::Array(values) => values
+                .iter()
+                .find_map(|value| Self::find_identifier(value, keys)),
+            _ => None,
+        }
     }
 
     #[must_use]
@@ -100,5 +128,40 @@ impl SessionContext {
             .duration_since(UNIX_EPOCH)
             .map_or(0_u128, |duration| duration.as_millis());
         format!("{prefix}_{timestamp_ms}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn update_from_payload_uses_nested_match_guid() {
+        let mut context = SessionContext::new(None, None);
+        let payload = json!({
+            "Event": "UpdateState",
+            "Data": {
+                "MatchGuid": "A1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6"
+            }
+        });
+
+        context.update_from_payload(&payload);
+
+        assert_eq!(context.active_match_id, "A1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6");
+        assert_eq!(context.id_source, "Telemetry");
+    }
+
+    #[test]
+    fn update_from_payload_uses_stripped_match_guid() {
+        let mut context = SessionContext::new(None, None);
+        let payload = json!({
+            "MatchGuid": "STRIPPED_MATCH_GUID"
+        });
+
+        context.update_from_payload(&payload);
+
+        assert_eq!(context.active_match_id, "STRIPPED_MATCH_GUID");
+        assert_eq!(context.id_source, "Telemetry");
     }
 }
