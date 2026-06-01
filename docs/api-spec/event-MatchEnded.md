@@ -1,0 +1,24 @@
+# MatchEnded
+
+**Category:** Event
+
+## Description
+Sent when the match ends and a winner is chosen.
+
+## Example Payload
+```json
+{
+  "Event": "MatchEnded",
+  "Data": {
+    "MatchGuid": "A1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6",
+    "WinnerTeamNum": 0
+  }
+}
+```
+
+## Field Dictionary
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `MatchGuid` | `string` | Only set for online or LAN matches. |
+| `WinnerTeamNum` | `int` | Team index of the winning team. |
