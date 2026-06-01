@@ -26,3 +26,5 @@ dist-ssr
 *.sw?
 /target
 /docs/tauri examples
+/docs/api-spec/Rocket League Stats API_files
+docs/api-spec/Rocket League Stats API.htm
