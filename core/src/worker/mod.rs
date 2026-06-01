@@ -463,13 +463,15 @@ impl RocketLeagueWorker {
 
     async fn handle_value(
         &self,
-        parsed: Value,
+        mut parsed: Value,
         shutdown: &CancellationToken,
         lanes: &RoutingLanes,
         sequence: &mut u64,
         session_context: &mut SessionContext,
         routing_stats: &mut RoutingStats,
     ) -> Result<(), String> {
+        Self::unwrap_double_encoded_data(&mut parsed);
+
         let Some(event_name) = parsed.get("Event").and_then(Value::as_str) else {
             println!("Received JSON without Event field.");
             return Ok(());
@@ -486,24 +488,43 @@ impl RocketLeagueWorker {
 
         if event_name.is_empty() {
             println!("Received JSON with empty Event field.");
-            Ok(())
-        } else {
-            session_context.update_from_payload(&parsed);
-            self.set_last_event(event_name);
-            *sequence = sequence.saturating_add(1);
-            let class = Self::classify_event(&parsed_event);
-            let payload = normalize_payload(class, &parsed, event_name, session_context);
-            let envelope = IngestEnvelope {
-                seq: *sequence,
-                event_type: event_name.to_string(),
-                payload,
-                class,
-                active_match_id: session_context.active_match_id.clone(),
-            };
-
-            self.route_envelope(envelope, shutdown, lanes, routing_stats)
-                .await
+            return Ok(());
         }
+
+        match parsed_event {
+            RocketLeagueEvent::GoalReplayStart => session_context.in_replay = true,
+            RocketLeagueEvent::GoalReplayEnd => session_context.in_replay = false,
+            _ => {}
+        }
+
+        if Self::is_replay_active_in_payload(&parsed) {
+            session_context.in_replay = true;
+        }
+
+        session_context.update_from_payload(&parsed);
+        self.set_last_event(event_name);
+        *sequence = sequence.saturating_add(1);
+        let class = Self::classify_event(&parsed_event);
+
+        if session_context.in_replay && class == IngestClass::Historical {
+            eprintln!(
+                "Skipping historical event '{}' (seq={}) due to active replay.",
+                event_name, *sequence
+            );
+            return Ok(());
+        }
+
+        let payload = normalize_payload(class, &parsed, event_name, session_context);
+        let envelope = IngestEnvelope {
+            seq: *sequence,
+            event_type: event_name.to_string(),
+            payload,
+            class,
+            active_match_id: session_context.active_match_id.clone(),
+        };
+
+        self.route_envelope(envelope, shutdown, lanes, routing_stats)
+            .await
     }
 
     async fn route_envelope(
@@ -556,13 +577,55 @@ impl RocketLeagueWorker {
             RocketLeagueEvent::UpdateState | RocketLeagueEvent::ClockUpdated => {
                 IngestClass::LiveState
             }
-            RocketLeagueEvent::EventFeedMarker | RocketLeagueEvent::MatchHistoryMarker => {
-                IngestClass::EventFeed
-            }
+            RocketLeagueEvent::EventFeedMarker
+            | RocketLeagueEvent::MatchHistoryMarker
+            | RocketLeagueEvent::GoalReplayStart
+            | RocketLeagueEvent::GoalReplayEnd => IngestClass::EventFeed,
             RocketLeagueEvent::Goal
             | RocketLeagueEvent::Save
             | RocketLeagueEvent::Demolition
             | RocketLeagueEvent::Unknown(_) => IngestClass::Historical,
+        }
+    }
+
+    fn is_replay_active_in_payload(parsed: &Value) -> bool {
+        transformer::find_value_by_keys(parsed, &["bReplay", "b_replay", "bReplay"])
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    }
+
+    fn unwrap_double_encoded_data(parsed: &mut Value) {
+        const DATA_KEYS: &[&str] = &["Data", "data"];
+
+        let Value::Object(envelope) = parsed else {
+            return;
+        };
+
+        for key in DATA_KEYS {
+            let Some(data_value) = envelope.get_mut(*key) else {
+                continue;
+            };
+
+            let data_str = match data_value {
+                Value::String(s) => std::mem::take(s),
+                _ => return,
+            };
+
+            if data_str.trim().is_empty() {
+                return;
+            }
+
+            match serde_json::from_str::<Value>(&data_str) {
+                Ok(Value::Object(inner_data)) => {
+                    *data_value = Value::Object(inner_data);
+                }
+                Ok(other) => {
+                    *data_value = other;
+                }
+                Err(err) => {
+                    eprintln!("Failed to unwrap double-encoded Data field: {err}");
+                }
+            }
         }
     }
 
@@ -745,6 +808,14 @@ mod tests {
         assert!(matches!(
             RocketLeagueWorker::classify_event(&RocketLeagueEvent::Unknown("Other".to_string())),
             IngestClass::Historical
+        ));
+        assert!(matches!(
+            RocketLeagueWorker::classify_event(&RocketLeagueEvent::GoalReplayStart),
+            IngestClass::EventFeed
+        ));
+        assert!(matches!(
+            RocketLeagueWorker::classify_event(&RocketLeagueEvent::GoalReplayEnd),
+            IngestClass::EventFeed
         ));
     }
 }
