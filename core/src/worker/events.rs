@@ -67,3 +67,16 @@ impl IngestEnvelope {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn from_event_name_maps_goal_scored_to_goal() {
+        assert_eq!(
+            RocketLeagueEvent::from_event_name("GoalScored".to_string()),
+            RocketLeagueEvent::Goal
+        );
+    }
+}
