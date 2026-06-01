@@ -43,6 +43,7 @@ pub fn normalize_live_state(raw: &Value, session_context: &SessionContext) -> Va
             "remainingSeconds",
             "clock_seconds_remaining",
             "clockSecondsRemaining",
+            "TimeSeconds",
         ],
     )
     .unwrap_or(0);
@@ -218,6 +219,7 @@ pub fn extract_game_seconds_remaining(raw: &Value) -> Option<u64> {
             "secondsRemaining",
             "time_remaining_seconds",
             "timeRemainingSeconds",
+            "TimeSeconds",
             "remaining_seconds",
             "remainingSeconds",
         ],
@@ -225,27 +227,72 @@ pub fn extract_game_seconds_remaining(raw: &Value) -> Option<u64> {
 }
 
 pub fn extract_score_object(raw: &Value) -> Value {
-    let blue = extract_u64_from_keys(
-        raw,
-        &["blue", "blue_score", "blueScore", "score_blue", "scoreBlue"],
-    )
-    .unwrap_or(0);
-    let orange = extract_u64_from_keys(
-        raw,
-        &[
-            "orange",
-            "orange_score",
-            "orangeScore",
-            "score_orange",
-            "scoreOrange",
-        ],
-    )
-    .unwrap_or(0);
+    let (blue, orange) = extract_scores_from_teams(raw).unwrap_or_else(|| {
+        let blue = extract_u64_from_keys(
+            raw,
+            &["blue", "blue_score", "blueScore", "score_blue", "scoreBlue"],
+        )
+        .unwrap_or(0);
+        let orange = extract_u64_from_keys(
+            raw,
+            &[
+                "orange",
+                "orange_score",
+                "orangeScore",
+                "score_orange",
+                "scoreOrange",
+            ],
+        )
+        .unwrap_or(0);
+
+        (blue, orange)
+    });
 
     let mut score = Map::new();
     score.insert("blue".to_string(), Value::from(blue));
     score.insert("orange".to_string(), Value::from(orange));
     Value::Object(score)
+}
+
+fn extract_scores_from_teams(raw: &Value) -> Option<(u64, u64)> {
+    let teams = find_value_by_keys(raw, &["Teams"])?;
+    let mut blue = None;
+    let mut orange = None;
+
+    match teams {
+        Value::Array(values) => {
+            for team in values {
+                apply_team_score(team, &mut blue, &mut orange);
+            }
+        }
+        Value::Object(object) => {
+            for team in object.values() {
+                apply_team_score(team, &mut blue, &mut orange);
+            }
+        }
+        _ => {}
+    }
+
+    if blue.is_some() || orange.is_some() {
+        Some((blue.unwrap_or(0), orange.unwrap_or(0)))
+    } else {
+        None
+    }
+}
+
+fn apply_team_score(team: &Value, blue: &mut Option<u64>, orange: &mut Option<u64>) {
+    let Some(team_num) = extract_u64_from_keys(team, &["TeamNum", "team_num", "teamNum"]) else {
+        return;
+    };
+    let Some(score) = extract_u64_from_keys(team, &["Score", "score"]) else {
+        return;
+    };
+
+    match team_num {
+        0 => *blue = Some(score),
+        1 => *orange = Some(score),
+        _ => {}
+    }
 }
 
 pub fn extract_player_telemetry(raw: &Value) -> Value {
@@ -266,6 +313,9 @@ pub fn collect_player_telemetry(
                 &[
                     "player_id",
                     "playerId",
+                    "PrimaryId",
+                    "primary_id",
+                    "primaryId",
                     "id",
                     "Id",
                     "unique_id",
@@ -276,7 +326,7 @@ pub fn collect_player_telemetry(
                     "epicId",
                 ],
             )
-            .or_else(|| parent_key.map(ToString::to_string));
+            .or_else(|| fallback_player_id_from_parent_key(parent_key));
 
             let mut telemetry = Map::new();
 
@@ -306,6 +356,30 @@ pub fn collect_player_telemetry(
             }
         }
         _ => {}
+    }
+}
+
+fn fallback_player_id_from_parent_key(parent_key: Option<&str>) -> Option<String> {
+    let key = parent_key?.trim();
+    if key.is_empty()
+        || matches!(
+            key,
+            "Data"
+                | "Game"
+                | "Players"
+                | "Teams"
+                | "Ball"
+                | "Target"
+                | "Attacker"
+                | "Scorer"
+                | "Assister"
+                | "BallLastTouch"
+                | "Player"
+        )
+    {
+        None
+    } else {
+        Some(key.to_string())
     }
 }
 
@@ -376,5 +450,117 @@ pub fn find_value_by_keys<'a>(raw: &'a Value, keys: &[&str]) -> Option<&'a Value
             .iter()
             .find_map(|value| find_value_by_keys(value, keys)),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn session_context() -> SessionContext {
+        SessionContext::new(
+            Some("match_cfg_1".to_string()),
+            Some("session_cfg_1".to_string()),
+        )
+    }
+
+    #[test]
+    fn live_state_reads_spec_time_seconds_from_game_data() {
+        let raw = json!({
+            "Event": "UpdateState",
+            "Data": {
+                "Game": {
+                    "TimeSeconds": 180,
+                    "Teams": []
+                }
+            }
+        });
+
+        let normalized = normalize_live_state(&raw, &session_context());
+
+        assert_eq!(
+            normalized.get("time_remaining_seconds"),
+            Some(&Value::from(180_u64))
+        );
+    }
+
+    #[test]
+    fn live_state_reads_spec_time_seconds_from_clock_event_data() {
+        let raw = json!({
+            "Event": "ClockUpdatedSeconds",
+            "Data": {
+                "TimeSeconds": 179,
+                "bOvertime": false
+            }
+        });
+
+        let normalized = normalize_live_state(&raw, &session_context());
+
+        assert_eq!(
+            normalized.get("time_remaining_seconds"),
+            Some(&Value::from(179_u64))
+        );
+    }
+
+    #[test]
+    fn score_object_reads_spec_teams_array() {
+        let raw = json!({
+            "Event": "UpdateState",
+            "Data": {
+                "Game": {
+                    "Teams": [
+                        {"Name": "Orange", "TeamNum": 1, "Score": 3},
+                        {"Name": "Blue", "TeamNum": 0, "Score": 2}
+                    ]
+                }
+            }
+        });
+
+        let score = extract_score_object(&raw);
+
+        assert_eq!(score.get("blue"), Some(&Value::from(2_u64)));
+        assert_eq!(score.get("orange"), Some(&Value::from(3_u64)));
+    }
+
+    #[test]
+    fn player_telemetry_uses_primary_id_and_ignores_players_parent_key() {
+        let raw = json!({
+            "Event": "UpdateState",
+            "Data": {
+                "Players": [
+                    {
+                        "Name": "PlayerA",
+                        "PrimaryId": "Steam|123|0",
+                        "Score": 125,
+                        "Goals": 1,
+                        "Boost": 45
+                    },
+                    {
+                        "Name": "PlayerB",
+                        "PrimaryId": "Epic|456|0",
+                        "Score": 250,
+                        "Goals": 2,
+                        "Boost": 80
+                    }
+                ],
+                "Game": {
+                    "Teams": [
+                        {"TeamNum": 0, "Score": 1},
+                        {"TeamNum": 1, "Score": 2}
+                    ]
+                }
+            }
+        });
+
+        let telemetry = extract_player_telemetry(&raw);
+        let Some(players) = telemetry.as_object() else {
+            return;
+        };
+
+        assert!(players.contains_key("Steam|123|0"));
+        assert!(players.contains_key("Epic|456|0"));
+        assert!(!players.contains_key("Players"));
+        assert!(!players.contains_key("Teams"));
     }
 }
