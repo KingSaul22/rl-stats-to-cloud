@@ -173,6 +173,23 @@ pub fn normalize_historical(
         payload.insert("player_id".to_string(), Value::String(player_id));
     }
 
+    if let Some(team) = find_value_by_keys(raw, &["Scorer"])
+        .and_then(|scorer| extract_u64_from_keys(scorer, &["TeamNum", "team_num", "teamNum"]))
+        .map(|team_num| match team_num {
+            0 => "blue",
+            1 => "orange",
+            _ => "unknown",
+        })
+    {
+        payload.insert("team".to_string(), Value::String(team.to_string()));
+    }
+
+    if let Some(scorer_name) = find_value_by_keys(raw, &["Scorer"])
+        .and_then(|scorer| extract_string_from_keys(scorer, &["Name"]))
+    {
+        payload.insert("scorer".to_string(), Value::String(scorer_name));
+    }
+
     let details = extract_details_object(raw);
     payload.insert("details".to_string(), details);
     Value::Object(payload)
@@ -395,6 +412,13 @@ pub fn extract_details_object(raw: &Value) -> Value {
     if let Some(speed_kph) = extract_u64_from_keys(raw, &["speed_kph", "speedKph"]) {
         details.insert("speed_kph".to_string(), Value::from(speed_kph));
     }
+    if let Some(goal_speed) = extract_u64_from_keys(raw, &["GoalSpeed", "goal_speed", "goalSpeed"])
+    {
+        details.insert("goal_speed".to_string(), Value::from(goal_speed));
+    }
+    if let Some(goal_time) = extract_u64_from_keys(raw, &["GoalTime", "goal_time", "goalTime"]) {
+        details.insert("goal_time".to_string(), Value::from(goal_time));
+    }
 
     Value::Object(details)
 }
@@ -407,11 +431,13 @@ pub fn extract_string_from_keys(raw: &Value, keys: &[&str]) -> Option<String> {
         .map(ToString::to_string)
 }
 
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 pub fn extract_u64_from_keys(raw: &Value, keys: &[&str]) -> Option<u64> {
     find_value_by_keys(raw, keys).and_then(|value| {
         value
             .as_u64()
             .or_else(|| value.as_i64().and_then(|number| u64::try_from(number).ok()))
+            .or_else(|| value.as_f64().map(|f| f.round() as u64))
             .or_else(|| {
                 value
                     .as_str()
@@ -420,11 +446,13 @@ pub fn extract_u64_from_keys(raw: &Value, keys: &[&str]) -> Option<u64> {
     })
 }
 
+#[allow(clippy::cast_possible_truncation)]
 pub fn extract_i64_from_keys(raw: &Value, keys: &[&str]) -> Option<i64> {
     find_value_by_keys(raw, keys).and_then(|value| {
         value
             .as_i64()
             .or_else(|| value.as_u64().and_then(|number| i64::try_from(number).ok()))
+            .or_else(|| value.as_f64().map(|f| f.round() as i64))
             .or_else(|| {
                 value
                     .as_str()
@@ -471,7 +499,7 @@ mod tests {
             "Event": "UpdateState",
             "Data": {
                 "Game": {
-                    "TimeSeconds": 180,
+                    "TimeSeconds": 180.0,
                     "Teams": []
                 }
             }
@@ -490,7 +518,7 @@ mod tests {
         let raw = json!({
             "Event": "ClockUpdatedSeconds",
             "Data": {
-                "TimeSeconds": 179,
+                "TimeSeconds": 179.0,
                 "bOvertime": false
             }
         });
@@ -510,8 +538,8 @@ mod tests {
             "Data": {
                 "Game": {
                     "Teams": [
-                        {"Name": "Orange", "TeamNum": 1, "Score": 3},
-                        {"Name": "Blue", "TeamNum": 0, "Score": 2}
+                        {"Name": "Orange", "TeamNum": 1, "Score": 3.0},
+                        {"Name": "Blue", "TeamNum": 0, "Score": 2.0}
                     ]
                 }
             }
@@ -562,5 +590,67 @@ mod tests {
         assert!(players.contains_key("Epic|456|0"));
         assert!(!players.contains_key("Players"));
         assert!(!players.contains_key("Teams"));
+    }
+
+    #[test]
+    fn extract_u64_from_keys_handles_fractional_float() {
+        let raw = json!({
+            "TimeSeconds": 300.45
+        });
+
+        let result = extract_u64_from_keys(&raw, &["TimeSeconds"]);
+        assert_eq!(result, Some(300_u64));
+
+        let raw_zero = json!({"value": 0.0});
+        let result_zero = extract_u64_from_keys(&raw_zero, &["value"]);
+        assert_eq!(result_zero, Some(0_u64));
+    }
+
+    #[test]
+    fn normalize_historical_extracts_scorer_and_team() {
+        let ctx = session_context();
+        let raw = json!({
+            "Event": "GoalScored",
+            "Data": {
+                "MatchGuid": "A1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6",
+                "GoalSpeed": 87.3,
+                "GoalTime": 127.5,
+                "Scorer": {
+                    "Name": "PlayerA",
+                    "Shortcut": 1,
+                    "TeamNum": 0
+                }
+            }
+        });
+
+        let normalized = normalize_historical(&raw, "GoalScored", &ctx);
+
+        assert_eq!(
+            normalized.get("team"),
+            Some(&Value::String("blue".to_string()))
+        );
+        assert_eq!(
+            normalized.get("scorer"),
+            Some(&Value::String("PlayerA".to_string()))
+        );
+    }
+
+    #[test]
+    fn extract_details_object_captures_goal_speed_and_time() {
+        let raw = json!({
+            "Event": "GoalScored",
+            "Data": {
+                "GoalSpeed": 87.3,
+                "GoalTime": 127.5
+            }
+        });
+
+        let details = extract_details_object(&raw);
+        let Some(details_map) = details.as_object() else {
+            return;
+        };
+
+        assert_eq!(details_map.get("goal_speed"), Some(&Value::from(87_u64)));
+        assert_eq!(details_map.get("goal_time"), Some(&Value::from(128_u64)));
     }
 }
