@@ -153,7 +153,7 @@ impl FirebaseRoute {
             "UpdateState" | "ClockUpdated" | "ClockUpdatedSeconds"
         ) {
             Self::LiveState
-        } else if matches!(event_type, "Goal" | "Save" | "Demolition") {
+        } else if matches!(event_type, "Goal" | "GoalScored" | "Save" | "Demolition") {
             Self::Historical
         } else {
             Self::EventFeed
@@ -185,7 +185,7 @@ mod tests {
 
     #[test]
     fn from_event_type_maps_historical_events_to_historical() {
-        for event_type in ["Goal", "Save", "Demolition"] {
+        for event_type in ["Goal", "GoalScored", "Save", "Demolition"] {
             assert_eq!(
                 FirebaseRoute::from_event_type(event_type),
                 FirebaseRoute::Historical
