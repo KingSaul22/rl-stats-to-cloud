@@ -297,6 +297,17 @@ button:hover {
   margin-top: 0.5rem;
 }
 
+.control-panel {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.control-actions {
+  display: flex;
+  justify-content: flex-end;
+  width: 100%;
+}
+
 .btn-shutdown {
   display: flex;
   align-items: center;

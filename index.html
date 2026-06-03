@@ -71,10 +71,6 @@
               </ul>
             </div>
             <div class="offline-actions">
-              <button id="shutdown-daemon" class="btn-shutdown" type="button">
-                <span class="material-symbols-outlined">sync</span>
-                Shutdown Daemon
-              </button>
               <button id="offline-config-btn" class="btn-secondary" type="button">
                 <span class="material-symbols-outlined">settings</span>
                 Configuration
@@ -87,6 +83,15 @@
           </div>
         </div>
       </div>
+
+      <section class="panel control-panel" aria-label="Daemon Controls">
+        <div class="control-actions">
+          <button id="shutdown-daemon" class="btn-shutdown" type="button">
+            <span class="material-symbols-outlined">power_settings_new</span>
+            Shutdown Daemon
+          </button>
+        </div>
+      </section>
 
       <!-- ========== CONFIGURATION (always visible) ========== -->
       <section class="panel" aria-labelledby="config-title">
