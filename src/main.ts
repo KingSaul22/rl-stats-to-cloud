@@ -1,5 +1,4 @@
 import { listen } from "@tauri-apps/api/event";
-import { invoke } from "@tauri-apps/api/core"; // Tauri v2
 import { CONSTANTS } from "./constants";
 import type { AppConfig, StatusPayload } from "./schemas";
 import { parseStatusPayload } from "./schemas";
@@ -22,7 +21,13 @@ import {
 // ============================================================================
 
 const DEFAULT_CONFIG: AppConfig = {
-  connector: { type: "", url: "", authToken: null },
+  connector: {
+    type: "",
+    url: "",
+    apiKey: "",
+    email: "",
+    password: "",
+  },
   reconnectDelaySeconds: CONSTANTS.DEFAULT_DELAYS.RECONNECT,
   isHeadless: false,
   websocketUrl: "ws://localhost:1420",
@@ -94,6 +99,14 @@ function updateUIWithStatus(status: StatusPayload): void {
   toggleOfflinePanel(status.isConnected);
 }
 
+function hasRequiredFirebaseCredentials(config: AppConfig): boolean {
+  return (
+    config.connector.apiKey.trim().length > 0 &&
+    config.connector.email.trim().length > 0 &&
+    config.connector.password.trim().length > 0
+  );
+}
+
 async function handleSaveConfig(event: Event): Promise<void> {
   event.preventDefault();
 
@@ -116,6 +129,13 @@ async function handleSaveConfig(event: Event): Promise<void> {
   if (!Number.isFinite(newConfig.reconnectDelaySeconds) || newConfig.reconnectDelaySeconds <= 0) {
     logError("handleSaveConfig", `Invalid reconnect delay value: ${newConfig.reconnectDelaySeconds}`);
     renderSaveMessage(CONSTANTS.UI_MESSAGES.SAVED_ERROR, false);
+    setFormButtonState(false, previousButtonLabel || "Save Configuration");
+    return;
+  }
+
+  if (!hasRequiredFirebaseCredentials(newConfig)) {
+    logError("handleSaveConfig", "Missing required Firebase credentials.");
+    renderSaveMessage("api_key, email, and password are required.", false);
     setFormButtonState(false, previousButtonLabel || "Save Configuration");
     return;
   }
@@ -169,30 +189,44 @@ function cleanup(): void {
 }
 
 // ============================================================================
-// OFFLINE PANEL BUTTON HANDLERS
+// CONTROL PANEL BUTTON HANDLERS
 // ============================================================================
 
-function setupOfflinePanelButtons(): void {
-  const reconnectBtn = document.getElementById("reconnect-btn");
-  const configBtn = document.getElementById("offline-config-btn");
+function setupControlPanelButtons(): void {
+  const shutdownBtn = requiredElement<HTMLButtonElement>(
+    CONSTANTS.UI_SELECTORS.SHUTDOWN_BUTTON,
+    "shutdown-daemon"
+  );
+  const configBtn = requiredElement<HTMLButtonElement>(
+    CONSTANTS.UI_SELECTORS.OFFLINE_CONFIG_BUTTON,
+    "offline-config-btn"
+  );
 
-  if (reconnectBtn) {
-    reconnectBtn.addEventListener("click", async () => {
-      try {
-        // TODO: implement `reconnect_daemon` Tauri command in Rust
-        await invoke("reconnect_daemon");
-      } catch (error) {
-        logError("reconnect_daemon", error);
-      }
-    });
-  }
+  shutdownBtn.addEventListener("click", async () => {
+    const confirmed = window.confirm(
+      "Are you sure you want to shut down the background daemon?"
+    );
+    if (!confirmed) {
+      return;
+    }
 
-  if (configBtn) {
-    configBtn.addEventListener("click", () => {
-      // Config is always visible; just scroll to it smoothly
-      document.getElementById("config-title")?.scrollIntoView({ behavior: "smooth" });
-    });
-  }
+    shutdownBtn.disabled = true;
+
+    try {
+      await api.shutdownDaemon();
+      renderSaveMessage(CONSTANTS.UI_MESSAGES.SHUTDOWN_SUCCESS, true);
+    } catch (error) {
+      logError("shutdownDaemon", error);
+      renderSaveMessage(CONSTANTS.UI_MESSAGES.SHUTDOWN_ERROR, false);
+    } finally {
+      startSaveMessageTimeout();
+      shutdownBtn.disabled = false;
+    }
+  });
+
+  configBtn.addEventListener("click", () => {
+    document.getElementById("config-title")?.scrollIntoView({ behavior: "smooth" });
+  });
 }
 
 // ============================================================================
@@ -209,7 +243,7 @@ window.addEventListener("DOMContentLoaded", () => {
     );
     formEl.addEventListener("submit", handleSaveConfig);
 
-    setupOfflinePanelButtons();
+    setupControlPanelButtons();
 
     void initialize();
   } catch (error) {

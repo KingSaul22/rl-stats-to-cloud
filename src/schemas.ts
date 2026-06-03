@@ -10,8 +10,10 @@ export const RawConnectorConfigSchema = z
   .object({
     type: z.string().optional(),
     url: z.string().optional(),
-    auth_token: z.string().nullable().optional(),
-    authToken: z.string().nullable().optional(),
+    api_key: z.string().optional(),
+    apiKey: z.string().optional(),
+    email: z.string().optional(),
+    password: z.string().optional(),
   })
   .loose();
 
@@ -46,7 +48,9 @@ export type AppConfig = {
   connector: {
     type: string;
     url: string;
-    authToken: string | null;
+    apiKey: string;
+    email: string;
+    password: string;
   };
   reconnectDelaySeconds: number;
   isHeadless: boolean;
@@ -74,14 +78,25 @@ export function normalizeAppConfig(raw: unknown): AppConfig {
   const connectorRaw = validated.connector;
   let connectorType = "";
   let connectorUrl = "";
-  let connectorAuthToken: string | null = null;
+  let connectorApiKey = "";
+  let connectorEmail = "";
+  let connectorPassword = "";
 
   if (connectorRaw && typeof connectorRaw === "object") {
-    const conn = connectorRaw as { type?: unknown; url?: unknown; auth_token?: unknown; authToken?: unknown };
+    const conn = connectorRaw as {
+      type?: unknown;
+      url?: unknown;
+      api_key?: unknown;
+      apiKey?: unknown;
+      email?: unknown;
+      password?: unknown;
+    };
     connectorType = typeof conn.type === "string" ? conn.type : "";
     connectorUrl = typeof conn.url === "string" ? conn.url : "";
-    const authRaw = conn.auth_token ?? conn.authToken;
-    connectorAuthToken = typeof authRaw === "string" ? authRaw : null;
+    const apiKeyRaw = conn.apiKey ?? conn.api_key;
+    connectorApiKey = typeof apiKeyRaw === "string" ? apiKeyRaw : "";
+    connectorEmail = typeof conn.email === "string" ? conn.email : "";
+    connectorPassword = typeof conn.password === "string" ? conn.password : "";
   }
 
   const reconnectDelay =
@@ -106,7 +121,9 @@ export function normalizeAppConfig(raw: unknown): AppConfig {
     connector: {
       type: connectorType,
       url: connectorUrl,
-      authToken: connectorAuthToken,
+      apiKey: connectorApiKey,
+      email: connectorEmail,
+      password: connectorPassword,
     },
     reconnectDelaySeconds: reconnectDelay ?? CONSTANTS.DEFAULT_DELAYS.RECONNECT,
     isHeadless,
