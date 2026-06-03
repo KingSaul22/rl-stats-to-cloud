@@ -16,6 +16,7 @@ pub(super) const CONTROL_IO_TIMEOUT_SECONDS: u64 = 3;
 pub(super) enum ControlCommand {
     AllowUi,
     DisallowUi,
+    Poweroff,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -94,6 +95,13 @@ pub(super) async fn send_control_command(command: ControlCommand) -> ControlRepl
             "Timed out waiting for daemon control reply after {CONTROL_IO_TIMEOUT_SECONDS}s."
         ),
     })
+}
+
+pub(super) async fn request_poweroff() -> Result<(), String> {
+    match send_control_command(ControlCommand::Poweroff).await {
+        ControlReply::Ok { .. } => Ok(()),
+        ControlReply::NotRunning { message } | ControlReply::Error { message } => Err(message),
+    }
 }
 
 pub(super) async fn run_state_bridge_loop(
