@@ -248,3 +248,34 @@ fn token_needs_refresh(expires_at: SystemTime) -> bool {
 fn redact_error_body(body: &str) -> String {
     body.to_string()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{REFRESH_MARGIN, token_needs_refresh};
+    use std::time::Duration;
+    use std::time::SystemTime;
+
+    #[test]
+    fn token_needs_refresh_when_already_expired() {
+        let expires_at = SystemTime::now() - Duration::from_secs(1);
+        assert!(token_needs_refresh(expires_at));
+    }
+
+    #[test]
+    fn token_needs_refresh_when_within_margin() {
+        let expires_at = SystemTime::now() + REFRESH_MARGIN - Duration::from_secs(1);
+        assert!(token_needs_refresh(expires_at));
+    }
+
+    #[test]
+    fn token_needs_refresh_when_exactly_at_margin_boundary() {
+        let expires_at = SystemTime::now() + REFRESH_MARGIN;
+        assert!(token_needs_refresh(expires_at));
+    }
+
+    #[test]
+    fn token_does_not_need_refresh_when_safely_outside_margin() {
+        let expires_at = SystemTime::now() + REFRESH_MARGIN + Duration::from_secs(1);
+        assert!(!token_needs_refresh(expires_at));
+    }
+}
