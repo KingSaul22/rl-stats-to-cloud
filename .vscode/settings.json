@@ -58,6 +58,30 @@
     "/^cargo test --all-features$/": {
       "approve": true,
       "matchCommandLine": true
+    },
+    "/^cargo test --all-features 2>&1; cargo clippy --all-targets --all-features -- -D warnings -D clippy::all -D clippy::pedantic -D clippy::nursery 2>&1$/": {
+      "approve": true,
+      "matchCommandLine": true
+    },
+    "/^cargo clippy -p rl_stats_core --all-targets --all-features -- -D warnings -D clippy::all -D clippy::pedantic -D clippy::nursery$/": {
+      "approve": true,
+      "matchCommandLine": true
+    },
+    "/^cargo test -p rl_stats_core merge_json_value --all-features$/": {
+      "approve": true,
+      "matchCommandLine": true
+    },
+    "/^cargo test -p rl_stats_core worker::actors --all-features$/": {
+      "approve": true,
+      "matchCommandLine": true
+    },
+    "/^cargo test -p rl_stats_core worker::transformer --all-features$/": {
+      "approve": true,
+      "matchCommandLine": true
+    },
+    "/^cargo clippy -p rl_stats_core --all-targets --all-features -- -D warnings -D clippy::all -D clippy::pedantic -D clippy::nursery; cargo test --all-features 2>&1; cargo clippy --all-targets --all-features -- -D warnings -D clippy::all -D clippy::pedantic -D clippy::nursery 2>&1$/": {
+      "approve": true,
+      "matchCommandLine": true
     }
   }
 }
