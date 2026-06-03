@@ -71,11 +71,11 @@
               </ul>
             </div>
             <div class="offline-actions">
-              <button id="reconnect-btn" class="btn-reconnect">
+              <button id="shutdown-daemon" class="btn-shutdown" type="button">
                 <span class="material-symbols-outlined">sync</span>
-                Reconnect
+                Shutdown Daemon
               </button>
-              <button id="offline-config-btn" class="btn-secondary">
+              <button id="offline-config-btn" class="btn-secondary" type="button">
                 <span class="material-symbols-outlined">settings</span>
                 Configuration
               </button>
@@ -113,13 +113,37 @@
           </div>
 
           <div class="form-group">
-            <label for="connector-auth-token">Database Auth Token</label>
+            <label for="connector-api-key">Firebase API Key</label>
             <input
-              id="connector-auth-token"
-              name="connectorAuthToken"
+              id="connector-api-key"
+              name="connectorApiKey"
+              type="text"
+              placeholder="Enter Firebase Web API key"
+              required
+            />
+          </div>
+
+          <div class="form-group">
+            <label for="connector-email">Firebase Service Email</label>
+            <input
+              id="connector-email"
+              name="connectorEmail"
+              type="email"
+              placeholder="firebase-user@example.com"
+              autocomplete="email"
+              required
+            />
+          </div>
+
+          <div class="form-group">
+            <label for="connector-password">Firebase Service Password</label>
+            <input
+              id="connector-password"
+              name="connectorPassword"
               type="password"
-              placeholder="Enter database secret or token"
+              placeholder="Enter Firebase account password"
               autocomplete="current-password"
+              required
             />
           </div>
 
