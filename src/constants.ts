@@ -6,6 +6,7 @@ export const COMMANDS = {
   GET_CONFIG: "get_config",
   SAVE_CONFIG: "save_config",
   GET_STATUS: "get_status",
+  SHUTDOWN_DAEMON: "shutdown_daemon",
 } as const;
 
 export const CONSTANTS = {
@@ -21,10 +22,12 @@ export const CONSTANTS = {
     SAVING: "Saving...",
     SAVED_SUCCESS: "Saved successfully!",
     SAVED_ERROR: "Failed to save configuration",
+    SHUTDOWN_SUCCESS: "Daemon shutdown request sent.",
+    SHUTDOWN_ERROR: "Failed to shut down daemon",
     INIT_ERROR: "Failed to initialize app state",
-    CONNECTING: "Connecting...",
-    CONNECTED: "Connected",
-    DISCONNECTED: "Disconnected",
+    CONNECTING: "⚪ Connecting",
+    CONNECTED: "🟢 Running",
+    DISCONNECTED: "🔴 Offline",
     NONE_EVENT: "None",
   },
   DEFAULT_DELAYS: {
@@ -39,8 +42,12 @@ export const CONSTANTS = {
     SAVE_STATUS: "#save-status",
     CONNECTOR_TYPE: "#connector-type",
     CONNECTOR_URL: "#connector-url",
-    CONNECTOR_AUTH_TOKEN: "#connector-auth-token",
+    CONNECTOR_API_KEY: "#connector-api-key",
+    CONNECTOR_EMAIL: "#connector-email",
+    CONNECTOR_PASSWORD: "#connector-password",
     RECONNECT_DELAY: "#reconnect-delay-seconds",
+    SHUTDOWN_BUTTON: "#shutdown-daemon",
+    OFFLINE_CONFIG_BUTTON: "#offline-config-btn",
   },
   CSS_CLASSES: {
     STATUS_CONNECTING: "status-connecting",

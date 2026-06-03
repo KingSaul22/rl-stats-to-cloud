@@ -76,4 +76,8 @@ export const api = {
     const raw = await invokeSafe<unknown>(COMMANDS.GET_STATUS);
     return parseStatusPayload(raw);
   },
+
+  async shutdownDaemon(): Promise<void> {
+    await invokeSafe<void>(COMMANDS.SHUTDOWN_DAEMON);
+  },
 } as const;
