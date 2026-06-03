@@ -350,7 +350,10 @@ mod tests {
         );
 
         assert_eq!(first_payload["arena"], json!("DFH Stadium"));
-        assert_eq!(first_payload["player_telemetry"]["player_1"]["boost"], json!(45));
+        assert_eq!(
+            first_payload["player_telemetry"]["player_1"]["boost"],
+            json!(45)
+        );
 
         let second_payload = update_live_state_cache(
             &mut master_state,
@@ -372,8 +375,14 @@ mod tests {
         assert_eq!(second_payload["time_remaining_seconds"], json!(179));
         assert_eq!(second_payload["score"]["blue"], json!(1));
         assert_eq!(second_payload["score"]["orange"], json!(0));
-        assert_eq!(second_payload["player_telemetry"]["player_1"]["boost"], json!(45));
-        assert_eq!(second_payload["player_telemetry"]["player_1"]["shots"], json!(3));
+        assert_eq!(
+            second_payload["player_telemetry"]["player_1"]["boost"],
+            json!(45)
+        );
+        assert_eq!(
+            second_payload["player_telemetry"]["player_1"]["shots"],
+            json!(3)
+        );
     }
 
     #[test]

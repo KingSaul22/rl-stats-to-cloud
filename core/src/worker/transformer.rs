@@ -392,8 +392,10 @@ pub fn collect_player_telemetry(raw: &Value, players: &mut Map<String, Value>) {
 
         let final_player_id = match primary_id.as_deref() {
             Some(id) if id != "Unknown|0|0" => id.to_string(),
-            _ => player_name
-                .map_or_else(|| "Unknown_Player".to_string(), |name| format!("Bot_{name}")),
+            _ => player_name.map_or_else(
+                || "Unknown_Player".to_string(),
+                |name| format!("Bot_{name}"),
+            ),
         };
 
         let mut telemetry = Map::new();
@@ -572,7 +574,10 @@ mod tests {
         let normalized = normalize_live_state(&raw, &session_context());
 
         assert!(normalized.get("score").is_none());
-        assert_eq!(normalized.get("time_remaining_seconds"), Some(&Value::from(179_u64)));
+        assert_eq!(
+            normalized.get("time_remaining_seconds"),
+            Some(&Value::from(179_u64))
+        );
     }
 
     #[test]
@@ -595,11 +600,17 @@ mod tests {
 
         let normalized = normalize_live_state(&raw, &session_context());
 
-        assert_eq!(normalized.get("arena"), Some(&Value::String("Champions Field".to_string())));
+        assert_eq!(
+            normalized.get("arena"),
+            Some(&Value::String("Champions Field".to_string()))
+        );
         assert_eq!(normalized.get("is_overtime"), Some(&Value::Bool(true)));
         assert_eq!(normalized.get("is_replay"), Some(&Value::Bool(false)));
         assert_eq!(normalized.get("has_winner"), Some(&Value::Bool(true)));
-        assert_eq!(normalized.get("winner"), Some(&Value::String("Blue".to_string())));
+        assert_eq!(
+            normalized.get("winner"),
+            Some(&Value::String("Blue".to_string()))
+        );
     }
 
     #[test]
