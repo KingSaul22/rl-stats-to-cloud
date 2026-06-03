@@ -67,7 +67,29 @@ pub fn normalize_live_state(raw: &Value, session_context: &SessionContext) -> Va
     );
     payload.insert("score".to_string(), score);
     payload.insert("player_telemetry".to_string(), player_telemetry);
+    if let Some(is_overtime) = find_value_by_keys(raw, &["bOvertime"]).and_then(Value::as_bool) {
+        payload.insert("is_overtime".to_string(), Value::Bool(is_overtime));
+    }
+    if let Some(is_replay) = find_value_by_keys(raw, &["bReplay"]).and_then(Value::as_bool) {
+        payload.insert("is_replay".to_string(), Value::Bool(is_replay));
+    }
+    if let Some(has_winner) = find_value_by_keys(raw, &["bHasWinner"]).and_then(Value::as_bool) {
+        payload.insert("has_winner".to_string(), Value::Bool(has_winner));
+    }
+    if let Some(winner) = extract_winner_name(raw) {
+        payload.insert("winner".to_string(), Value::String(winner));
+    }
+    if let Some(arena) = extract_string_from_keys(raw, &["Arena", "arena"]) {
+        payload.insert("arena".to_string(), Value::String(arena));
+    }
     Value::Object(payload)
+}
+
+fn extract_winner_name(raw: &Value) -> Option<String> {
+    extract_string_from_keys(raw, &["Winner"]).or_else(|| {
+        find_value_by_keys(raw, &["Winner"])
+            .and_then(|winner| extract_string_from_keys(winner, &["Name"]))
+    })
 }
 
 pub fn normalize_event_feed(
@@ -127,6 +149,29 @@ pub fn normalize_event_feed(
         payload.insert("victim_id".to_string(), Value::String(victim_id));
     }
 
+    match event_type {
+        "StatfeedEvent" => {
+            if let Some(primary_player) = find_value_by_keys(raw, &["MainTarget"])
+                .and_then(|target| extract_string_from_keys(target, &["Name"]))
+            {
+                payload.insert("primary_player".to_string(), Value::String(primary_player));
+            }
+            if let Some(stat_type) = extract_string_from_keys(raw, &["EventName"]) {
+                payload.insert("stat_type".to_string(), Value::String(stat_type));
+            }
+        }
+        "BallHit" => {
+            if let Some(ball) = find_value_by_keys(raw, &["Ball"]) {
+                if let Some(pre_hit_speed) = extract_u64_from_keys(ball, &["PreHitSpeed"]) {
+                    payload.insert("pre_hit_speed".to_string(), Value::from(pre_hit_speed));
+                }
+                if let Some(post_hit_speed) = extract_u64_from_keys(ball, &["PostHitSpeed"]) {
+                    payload.insert("post_hit_speed".to_string(), Value::from(post_hit_speed));
+                }
+            }
+        }
+        _ => {}
+    }
     Value::Object(payload)
 }
 
@@ -188,6 +233,11 @@ pub fn normalize_historical(
         .and_then(|scorer| extract_string_from_keys(scorer, &["Name"]))
     {
         payload.insert("scorer".to_string(), Value::String(scorer_name));
+    }
+    if let Some(assister_name) = find_value_by_keys(raw, &["Assister"])
+        .and_then(|assister| extract_string_from_keys(assister, &["Name"]))
+    {
+        payload.insert("assister".to_string(), Value::String(assister_name));
     }
 
     let details = extract_details_object(raw);
@@ -355,6 +405,21 @@ pub fn collect_player_telemetry(
             }
             if let Some(goals) = extract_u64_from_keys(raw, &["goals", "Goals"]) {
                 telemetry.insert("goals".to_string(), Value::from(goals));
+            }
+            if let Some(shots) = extract_u64_from_keys(raw, &["Shots", "shots"]) {
+                telemetry.insert("shots".to_string(), Value::from(shots));
+            }
+            if let Some(assists) = extract_u64_from_keys(raw, &["Assists", "assists"]) {
+                telemetry.insert("assists".to_string(), Value::from(assists));
+            }
+            if let Some(saves) = extract_u64_from_keys(raw, &["Saves", "saves"]) {
+                telemetry.insert("saves".to_string(), Value::from(saves));
+            }
+            if let Some(demos) = extract_u64_from_keys(raw, &["Demos", "demos"]) {
+                telemetry.insert("demos".to_string(), Value::from(demos));
+            }
+            if let Some(touches) = extract_u64_from_keys(raw, &["Touches", "touches"]) {
+                telemetry.insert("touches".to_string(), Value::from(touches));
             }
 
             if !telemetry.is_empty()
@@ -532,6 +597,33 @@ mod tests {
     }
 
     #[test]
+    fn live_state_extracts_arena_replay_and_winner_metadata() {
+        let raw = json!({
+            "Event": "UpdateState",
+            "Data": {
+                "Game": {
+                    "TimeSeconds": 95.0,
+                    "Arena": "Champions Field"
+                },
+                "bOvertime": true,
+                "bReplay": false,
+                "bHasWinner": true,
+                "Winner": {
+                    "Name": "Blue"
+                }
+            }
+        });
+
+        let normalized = normalize_live_state(&raw, &session_context());
+
+        assert_eq!(normalized.get("arena"), Some(&Value::String("Champions Field".to_string())));
+        assert_eq!(normalized.get("is_overtime"), Some(&Value::Bool(true)));
+        assert_eq!(normalized.get("is_replay"), Some(&Value::Bool(false)));
+        assert_eq!(normalized.get("has_winner"), Some(&Value::Bool(true)));
+        assert_eq!(normalized.get("winner"), Some(&Value::String("Blue".to_string())));
+    }
+
+    #[test]
     fn score_object_reads_spec_teams_array() {
         let raw = json!({
             "Event": "UpdateState",
@@ -562,14 +654,24 @@ mod tests {
                         "PrimaryId": "Steam|123|0",
                         "Score": 125,
                         "Goals": 1,
-                        "Boost": 45
+                        "Boost": 45,
+                        "Shots": 2,
+                        "Assists": 1,
+                        "Saves": 3,
+                        "Demos": 4,
+                        "Touches": 5
                     },
                     {
                         "Name": "PlayerB",
                         "PrimaryId": "Epic|456|0",
                         "Score": 250,
                         "Goals": 2,
-                        "Boost": 80
+                        "Boost": 80,
+                        "Shots": 6,
+                        "Assists": 0,
+                        "Saves": 1,
+                        "Demos": 2,
+                        "Touches": 7
                     }
                 ],
                 "Game": {
@@ -590,6 +692,20 @@ mod tests {
         assert!(players.contains_key("Epic|456|0"));
         assert!(!players.contains_key("Players"));
         assert!(!players.contains_key("Teams"));
+
+        assert_eq!(players["Steam|123|0"]["boost"], json!(45));
+        assert_eq!(players["Steam|123|0"]["shots"], json!(2));
+        assert_eq!(players["Steam|123|0"]["assists"], json!(1));
+        assert_eq!(players["Steam|123|0"]["saves"], json!(3));
+        assert_eq!(players["Steam|123|0"]["demos"], json!(4));
+        assert_eq!(players["Steam|123|0"]["touches"], json!(5));
+
+        assert_eq!(players["Epic|456|0"]["boost"], json!(80));
+        assert_eq!(players["Epic|456|0"]["shots"], json!(6));
+        assert_eq!(players["Epic|456|0"]["assists"], json!(0));
+        assert_eq!(players["Epic|456|0"]["saves"], json!(1));
+        assert_eq!(players["Epic|456|0"]["demos"], json!(2));
+        assert_eq!(players["Epic|456|0"]["touches"], json!(7));
     }
 
     #[test]
