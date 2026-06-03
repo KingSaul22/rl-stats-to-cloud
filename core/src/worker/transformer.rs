@@ -462,13 +462,12 @@ pub fn extract_string_from_keys(raw: &Value, keys: &[&str]) -> Option<String> {
         .map(ToString::to_string)
 }
 
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 pub fn extract_u64_from_keys(raw: &Value, keys: &[&str]) -> Option<u64> {
     find_value_by_keys(raw, keys).and_then(|value| {
         value
             .as_u64()
             .or_else(|| value.as_i64().and_then(|number| u64::try_from(number).ok()))
-            .or_else(|| value.as_f64().map(|f| f.round() as u64))
+            .or_else(|| value.as_f64().and_then(parse_rounded_u64))
             .or_else(|| {
                 value
                     .as_str()
@@ -477,19 +476,39 @@ pub fn extract_u64_from_keys(raw: &Value, keys: &[&str]) -> Option<u64> {
     })
 }
 
-#[allow(clippy::cast_possible_truncation)]
 pub fn extract_i64_from_keys(raw: &Value, keys: &[&str]) -> Option<i64> {
     find_value_by_keys(raw, keys).and_then(|value| {
         value
             .as_i64()
             .or_else(|| value.as_u64().and_then(|number| i64::try_from(number).ok()))
-            .or_else(|| value.as_f64().map(|f| f.round() as i64))
+            .or_else(|| value.as_f64().and_then(parse_rounded_i64))
             .or_else(|| {
                 value
                     .as_str()
                     .and_then(|text| text.trim().parse::<i64>().ok())
             })
     })
+}
+
+fn parse_rounded_u64(number: f64) -> Option<u64> {
+    if !number.is_finite() {
+        return None;
+    }
+
+    let rounded = number.round();
+    if rounded < 0.0 {
+        return None;
+    }
+
+    format!("{rounded:.0}").parse::<u64>().ok()
+}
+
+fn parse_rounded_i64(number: f64) -> Option<i64> {
+    if !number.is_finite() {
+        return None;
+    }
+
+    format!("{:.0}", number.round()).parse::<i64>().ok()
 }
 
 pub fn find_value_by_keys<'a>(raw: &'a Value, keys: &[&str]) -> Option<&'a Value> {
