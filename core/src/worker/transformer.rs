@@ -45,8 +45,7 @@ pub fn normalize_live_state(raw: &Value, session_context: &SessionContext) -> Va
             "clockSecondsRemaining",
             "TimeSeconds",
         ],
-    )
-    .unwrap_or(0);
+    );
 
     let score = extract_score_object(raw);
     let player_telemetry = extract_player_telemetry(raw);
@@ -61,11 +60,15 @@ pub fn normalize_live_state(raw: &Value, session_context: &SessionContext) -> Va
         "match_id".to_string(),
         Value::String(session_context.active_match_id.clone()),
     );
-    payload.insert(
-        "time_remaining_seconds".to_string(),
-        Value::from(time_remaining_seconds),
-    );
-    payload.insert("score".to_string(), score);
+    if let Some(time_remaining_seconds) = time_remaining_seconds {
+        payload.insert(
+            "time_remaining_seconds".to_string(),
+            Value::from(time_remaining_seconds),
+        );
+    }
+    if let Some(score) = score {
+        payload.insert("score".to_string(), score);
+    }
     payload.insert("player_telemetry".to_string(), player_telemetry);
     if let Some(is_overtime) = find_value_by_keys(raw, &["bOvertime"]).and_then(Value::as_bool) {
         payload.insert("is_overtime".to_string(), Value::Bool(is_overtime));
@@ -293,14 +296,24 @@ pub fn extract_game_seconds_remaining(raw: &Value) -> Option<u64> {
     )
 }
 
-pub fn extract_score_object(raw: &Value) -> Value {
-    let (blue, orange) = extract_scores_from_teams(raw).unwrap_or_else(|| {
-        let blue = extract_u64_from_keys(
+pub fn extract_score_object(raw: &Value) -> Option<Value> {
+    let mut score = Map::new();
+
+    if let Some((blue, orange)) = extract_scores_from_teams(raw) {
+        if let Some(blue) = blue {
+            score.insert("blue".to_string(), Value::from(blue));
+        }
+        if let Some(orange) = orange {
+            score.insert("orange".to_string(), Value::from(orange));
+        }
+    } else {
+        if let Some(blue) = extract_u64_from_keys(
             raw,
             &["blue", "blue_score", "blueScore", "score_blue", "scoreBlue"],
-        )
-        .unwrap_or(0);
-        let orange = extract_u64_from_keys(
+        ) {
+            score.insert("blue".to_string(), Value::from(blue));
+        }
+        if let Some(orange) = extract_u64_from_keys(
             raw,
             &[
                 "orange",
@@ -309,19 +322,15 @@ pub fn extract_score_object(raw: &Value) -> Value {
                 "score_orange",
                 "scoreOrange",
             ],
-        )
-        .unwrap_or(0);
+        ) {
+            score.insert("orange".to_string(), Value::from(orange));
+        }
+    }
 
-        (blue, orange)
-    });
-
-    let mut score = Map::new();
-    score.insert("blue".to_string(), Value::from(blue));
-    score.insert("orange".to_string(), Value::from(orange));
-    Value::Object(score)
+    (!score.is_empty()).then_some(Value::Object(score))
 }
 
-fn extract_scores_from_teams(raw: &Value) -> Option<(u64, u64)> {
+fn extract_scores_from_teams(raw: &Value) -> Option<(Option<u64>, Option<u64>)> {
     let teams = find_value_by_keys(raw, &["Teams"])?;
     let mut blue = None;
     let mut orange = None;
@@ -341,7 +350,7 @@ fn extract_scores_from_teams(raw: &Value) -> Option<(u64, u64)> {
     }
 
     if blue.is_some() || orange.is_some() {
-        Some((blue.unwrap_or(0), orange.unwrap_or(0)))
+        Some((blue, orange))
     } else {
         None
     }
@@ -597,6 +606,21 @@ mod tests {
     }
 
     #[test]
+    fn live_state_omits_missing_score_for_sparse_payloads() {
+        let raw = json!({
+            "Event": "ClockUpdatedSeconds",
+            "Data": {
+                "TimeSeconds": 179.0
+            }
+        });
+
+        let normalized = normalize_live_state(&raw, &session_context());
+
+        assert!(normalized.get("score").is_none());
+        assert_eq!(normalized.get("time_remaining_seconds"), Some(&Value::from(179_u64)));
+    }
+
+    #[test]
     fn live_state_extracts_arena_replay_and_winner_metadata() {
         let raw = json!({
             "Event": "UpdateState",
@@ -638,9 +662,25 @@ mod tests {
         });
 
         let score = extract_score_object(&raw);
+        assert!(score.is_some());
+        let Some(score) = score else {
+            return;
+        };
 
         assert_eq!(score.get("blue"), Some(&Value::from(2_u64)));
         assert_eq!(score.get("orange"), Some(&Value::from(3_u64)));
+    }
+
+    #[test]
+    fn score_object_is_omitted_when_no_score_fields_exist() {
+        let raw = json!({
+            "Event": "ClockUpdatedSeconds",
+            "Data": {
+                "TimeSeconds": 179.0
+            }
+        });
+
+        assert!(extract_score_object(&raw).is_none());
     }
 
     #[test]
