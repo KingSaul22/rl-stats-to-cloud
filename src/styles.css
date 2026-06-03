@@ -297,7 +297,7 @@ button:hover {
   margin-top: 0.5rem;
 }
 
-.btn-reconnect {
+.btn-shutdown {
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -313,7 +313,7 @@ button:hover {
   transition: all 0.2s;
 }
 
-.btn-reconnect:hover {
+.btn-shutdown:hover {
   background: var(--status-error);
   color: #690005;
   box-shadow: 0 0 12px rgba(255, 77, 77, 0.4);
