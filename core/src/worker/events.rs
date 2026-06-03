@@ -11,14 +11,24 @@ pub enum IngestClass {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RocketLeagueEvent {
     UpdateState,
-    ClockUpdated,
-    Goal,
-    Save,
-    Demolition,
-    GoalReplayStart,
+    BallHit,
+    ClockUpdatedSeconds,
+    CountdownBegin,
+    CrossbarHit,
     GoalReplayEnd,
-    EventFeedMarker,
-    MatchHistoryMarker,
+    GoalReplayStart,
+    GoalReplayWillEnd,
+    GoalScored,
+    MatchCreated,
+    MatchInitialized,
+    MatchDestroyed,
+    MatchEnded,
+    MatchPaused,
+    MatchUnpaused,
+    PodiumStart,
+    ReplayCreated,
+    RoundStarted,
+    StatfeedEvent,
     Unknown(String),
 }
 
@@ -27,14 +37,27 @@ impl RocketLeagueEvent {
     pub(crate) fn from_event_name(event_name: String) -> Self {
         match event_name.as_str() {
             "UpdateState" => Self::UpdateState,
-            "ClockUpdated" | "ClockUpdatedSeconds" => Self::ClockUpdated,
-            "Goal" | "GoalScored" => Self::Goal,
-            "Save" | "EpicSave" => Self::Save,
-            "Demolition" | "Demo" => Self::Demolition,
+            "BallHit" => Self::BallHit,
+            // Soportamos tanto el nombre oficial como el alias corto de reloj
+            "ClockUpdatedSeconds" | "ClockUpdated" => Self::ClockUpdatedSeconds,
+            "CountdownBegin" => Self::CountdownBegin,
+            "CrossbarHit" => Self::CrossbarHit,
             "GoalReplayStart" => Self::GoalReplayStart,
-            "GoalReplayEnd" | "GoalReplayWillEnd" => Self::GoalReplayEnd,
-            "EventFeedMarker" => Self::EventFeedMarker,
-            "MatchHistoryMarker" => Self::MatchHistoryMarker,
+            // Mapeamos el fin de la repetición de forma segura
+            "GoalReplayEnd" => Self::GoalReplayEnd,
+            "GoalReplayWillEnd" => Self::GoalReplayWillEnd, 
+            // Soportamos tanto el nombre oficial como el alias corto de gol
+            "GoalScored" | "Goal" => Self::GoalScored,
+            "MatchCreated" => Self::MatchCreated,
+            "MatchInitialized" => Self::MatchInitialized,
+            "MatchDestroyed" => Self::MatchDestroyed,
+            "MatchEnded" => Self::MatchEnded,
+            "MatchPaused" => Self::MatchPaused,
+            "MatchUnpaused" => Self::MatchUnpaused,
+            "PodiumStart" => Self::PodiumStart,
+            "ReplayCreated" => Self::ReplayCreated,
+            "RoundStarted" => Self::RoundStarted,
+            "StatfeedEvent" => Self::StatfeedEvent,
             _ => Self::Unknown(event_name),
         }
     }
@@ -77,10 +100,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn from_event_name_maps_goal_scored_to_goal() {
+    fn from_event_name_maps_goal_scored() {
         assert_eq!(
             RocketLeagueEvent::from_event_name("GoalScored".to_string()),
-            RocketLeagueEvent::Goal
+            RocketLeagueEvent::GoalScored
         );
     }
 
@@ -96,7 +119,7 @@ mod tests {
         );
         assert_eq!(
             RocketLeagueEvent::from_event_name("GoalReplayWillEnd".to_string()),
-            RocketLeagueEvent::GoalReplayEnd
+            RocketLeagueEvent::GoalReplayWillEnd
         );
     }
 }

@@ -574,17 +574,37 @@ impl RocketLeagueWorker {
 
     const fn classify_event(event: &RocketLeagueEvent) -> IngestClass {
         match event {
-            RocketLeagueEvent::UpdateState | RocketLeagueEvent::ClockUpdated => {
+            // Carril 1: LiveState (Frecuencia ultra-alta para snapshots y sincronización de reloj)
+            RocketLeagueEvent::UpdateState 
+            | RocketLeagueEvent::ClockUpdatedSeconds => {
                 IngestClass::LiveState
             }
-            RocketLeagueEvent::EventFeedMarker
-            | RocketLeagueEvent::MatchHistoryMarker
-            | RocketLeagueEvent::GoalReplayStart
-            | RocketLeagueEvent::GoalReplayEnd => IngestClass::EventFeed,
-            RocketLeagueEvent::Goal
-            | RocketLeagueEvent::Save
-            | RocketLeagueEvent::Demolition
-            | RocketLeagueEvent::Unknown(_) => IngestClass::Historical,
+
+            // Carril 2: EventFeed (Hitos de partida, eventos de ciclo de vida y métricas de juego secundarias)
+            RocketLeagueEvent::GoalReplayStart
+            | RocketLeagueEvent::GoalReplayEnd
+            | RocketLeagueEvent::GoalReplayWillEnd
+            | RocketLeagueEvent::MatchCreated
+            | RocketLeagueEvent::MatchInitialized
+            | RocketLeagueEvent::MatchDestroyed
+            | RocketLeagueEvent::MatchEnded
+            | RocketLeagueEvent::MatchPaused
+            | RocketLeagueEvent::MatchUnpaused
+            | RocketLeagueEvent::CountdownBegin
+            | RocketLeagueEvent::RoundStarted
+            | RocketLeagueEvent::PodiumStart
+            | RocketLeagueEvent::ReplayCreated
+            | RocketLeagueEvent::BallHit
+            | RocketLeagueEvent::CrossbarHit
+            | RocketLeagueEvent::StatfeedEvent => {
+                IngestClass::EventFeed
+            }
+
+            // Carril 3: Historical (Eventos transaccionales críticos de fin de juego o estructuras no reconocidas)
+            RocketLeagueEvent::GoalScored 
+            | RocketLeagueEvent::Unknown(_) => {
+                IngestClass::Historical
+            }
         }
     }
 
@@ -782,27 +802,27 @@ mod tests {
             IngestClass::LiveState
         ));
         assert!(matches!(
-            RocketLeagueWorker::classify_event(&RocketLeagueEvent::ClockUpdated),
+            RocketLeagueWorker::classify_event(&RocketLeagueEvent::ClockUpdatedSeconds),
             IngestClass::LiveState
         ));
         assert!(matches!(
-            RocketLeagueWorker::classify_event(&RocketLeagueEvent::EventFeedMarker),
+            RocketLeagueWorker::classify_event(&RocketLeagueEvent::MatchInitialized),
             IngestClass::EventFeed
         ));
         assert!(matches!(
-            RocketLeagueWorker::classify_event(&RocketLeagueEvent::MatchHistoryMarker),
+            RocketLeagueWorker::classify_event(&RocketLeagueEvent::StatfeedEvent),
             IngestClass::EventFeed
         ));
         assert!(matches!(
-            RocketLeagueWorker::classify_event(&RocketLeagueEvent::Goal),
+            RocketLeagueWorker::classify_event(&RocketLeagueEvent::GoalScored),
             IngestClass::Historical
         ));
         assert!(matches!(
-            RocketLeagueWorker::classify_event(&RocketLeagueEvent::Save),
+            RocketLeagueWorker::classify_event(&RocketLeagueEvent::Unknown("Save".to_string())),
             IngestClass::Historical
         ));
         assert!(matches!(
-            RocketLeagueWorker::classify_event(&RocketLeagueEvent::Demolition),
+            RocketLeagueWorker::classify_event(&RocketLeagueEvent::Unknown("Demolition".to_string())),
             IngestClass::Historical
         ));
         assert!(matches!(
