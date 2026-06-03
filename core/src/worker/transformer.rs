@@ -373,104 +373,59 @@ fn apply_team_score(team: &Value, blue: &mut Option<u64>, orange: &mut Option<u6
 
 pub fn extract_player_telemetry(raw: &Value) -> Value {
     let mut players = Map::new();
-    collect_player_telemetry(raw, &mut players, None);
+
+    if let Some(players_value) = find_value_by_keys(raw, &["Players", "players"])
+        && let Value::Array(entries) = players_value
+    {
+        for entry in entries {
+            collect_player_telemetry(entry, &mut players);
+        }
+    }
+
     Value::Object(players)
 }
 
-pub fn collect_player_telemetry(
-    raw: &Value,
-    players: &mut Map<String, Value>,
-    parent_key: Option<&str>,
-) {
-    match raw {
-        Value::Object(object) => {
-            let player_id = extract_string_from_keys(
-                raw,
-                &[
-                    "player_id",
-                    "playerId",
-                    "PrimaryId",
-                    "primary_id",
-                    "primaryId",
-                    "id",
-                    "Id",
-                    "unique_id",
-                    "uniqueId",
-                    "steam_id",
-                    "steamId",
-                    "epic_id",
-                    "epicId",
-                ],
-            )
-            .or_else(|| fallback_player_id_from_parent_key(parent_key));
+pub fn collect_player_telemetry(raw: &Value, players: &mut Map<String, Value>) {
+    if let Value::Object(_) = raw {
+        let primary_id = extract_string_from_keys(raw, &["PrimaryId", "primaryId"]);
+        let player_name = extract_string_from_keys(raw, &["Name", "name"]);
 
-            let mut telemetry = Map::new();
+        let final_player_id = match primary_id.as_deref() {
+            Some(id) if id != "Unknown|0|0" => id.to_string(),
+            _ => player_name
+                .map_or_else(|| "Unknown_Player".to_string(), |name| format!("Bot_{name}")),
+        };
 
-            if let Some(boost) = extract_u64_from_keys(raw, &["boost", "Boost"]) {
-                telemetry.insert("boost".to_string(), Value::from(boost));
-            }
-            if let Some(score) = extract_i64_from_keys(raw, &["score", "Score"]) {
-                telemetry.insert("score".to_string(), Value::from(score));
-            }
-            if let Some(goals) = extract_u64_from_keys(raw, &["goals", "Goals"]) {
-                telemetry.insert("goals".to_string(), Value::from(goals));
-            }
-            if let Some(shots) = extract_u64_from_keys(raw, &["Shots", "shots"]) {
-                telemetry.insert("shots".to_string(), Value::from(shots));
-            }
-            if let Some(assists) = extract_u64_from_keys(raw, &["Assists", "assists"]) {
-                telemetry.insert("assists".to_string(), Value::from(assists));
-            }
-            if let Some(saves) = extract_u64_from_keys(raw, &["Saves", "saves"]) {
-                telemetry.insert("saves".to_string(), Value::from(saves));
-            }
-            if let Some(demos) = extract_u64_from_keys(raw, &["Demos", "demos"]) {
-                telemetry.insert("demos".to_string(), Value::from(demos));
-            }
-            if let Some(touches) = extract_u64_from_keys(raw, &["Touches", "touches"]) {
-                telemetry.insert("touches".to_string(), Value::from(touches));
-            }
+        let mut telemetry = Map::new();
 
-            if !telemetry.is_empty()
-                && let Some(player_id) = player_id
-            {
-                players.insert(player_id, Value::Object(telemetry));
-            }
-
-            for (key, value) in object {
-                collect_player_telemetry(value, players, Some(key));
-            }
+        if let Some(boost) = extract_u64_from_keys(raw, &["boost", "Boost"]) {
+            telemetry.insert("boost".to_string(), Value::from(boost));
         }
-        Value::Array(values) => {
-            for value in values {
-                collect_player_telemetry(value, players, parent_key);
-            }
+        if let Some(score) = extract_i64_from_keys(raw, &["score", "Score"]) {
+            telemetry.insert("score".to_string(), Value::from(score));
         }
-        _ => {}
-    }
-}
+        if let Some(goals) = extract_u64_from_keys(raw, &["goals", "Goals"]) {
+            telemetry.insert("goals".to_string(), Value::from(goals));
+        }
+        if let Some(shots) = extract_u64_from_keys(raw, &["Shots", "shots"]) {
+            telemetry.insert("shots".to_string(), Value::from(shots));
+        }
+        if let Some(assists) = extract_u64_from_keys(raw, &["Assists", "assists"]) {
+            telemetry.insert("assists".to_string(), Value::from(assists));
+        }
+        if let Some(saves) = extract_u64_from_keys(raw, &["Saves", "saves"]) {
+            telemetry.insert("saves".to_string(), Value::from(saves));
+        }
+        if let Some(demos) = extract_u64_from_keys(raw, &["Demos", "demos"]) {
+            telemetry.insert("demos".to_string(), Value::from(demos));
+        }
+        if let Some(touches) = extract_u64_from_keys(raw, &["Touches", "touches"]) {
+            telemetry.insert("touches".to_string(), Value::from(touches));
+        }
 
-fn fallback_player_id_from_parent_key(parent_key: Option<&str>) -> Option<String> {
-    let key = parent_key?.trim();
-    if key.is_empty()
-        || matches!(
-            key,
-            "Data"
-                | "Game"
-                | "Players"
-                | "Teams"
-                | "Ball"
-                | "Target"
-                | "Attacker"
-                | "Scorer"
-                | "Assister"
-                | "BallLastTouch"
-                | "Player"
-        )
-    {
-        None
-    } else {
-        Some(key.to_string())
+        if !telemetry.is_empty() {
+            players.insert(final_player_id, Value::Object(telemetry));
+        }
     }
 }
 
@@ -746,6 +701,95 @@ mod tests {
         assert_eq!(players["Epic|456|0"]["saves"], json!(1));
         assert_eq!(players["Epic|456|0"]["demos"], json!(2));
         assert_eq!(players["Epic|456|0"]["touches"], json!(7));
+    }
+
+    #[test]
+    fn player_telemetry_uses_bot_name_when_primary_id_is_unknown() {
+        let raw = json!({
+            "Event": "UpdateState",
+            "Data": {
+                "Players": [
+                    {
+                        "Name": "Chipper",
+                        "PrimaryId": "Unknown|0|0",
+                        "Boost": 33,
+                        "Score": 80
+                    },
+                    {
+                        "Name": "Sultan",
+                        "PrimaryId": "Unknown|0|0",
+                        "Boost": 66,
+                        "Score": 120
+                    }
+                ]
+            }
+        });
+
+        let telemetry = extract_player_telemetry(&raw);
+        let Some(players) = telemetry.as_object() else {
+            return;
+        };
+
+        assert!(players.contains_key("Bot_Chipper"));
+        assert!(players.contains_key("Bot_Sultan"));
+        assert_eq!(players["Bot_Chipper"]["boost"], json!(33));
+        assert_eq!(players["Bot_Sultan"]["boost"], json!(66));
+        assert!(!players.contains_key("Unknown|0|0"));
+    }
+
+    #[test]
+    fn player_telemetry_falls_back_to_unknown_player_without_id_or_name() {
+        let raw = json!({
+            "Event": "UpdateState",
+            "Data": {
+                "Players": [
+                    {
+                        "Boost": 50,
+                        "Score": 10
+                    }
+                ]
+            }
+        });
+
+        let telemetry = extract_player_telemetry(&raw);
+        let Some(players) = telemetry.as_object() else {
+            return;
+        };
+
+        assert!(players.contains_key("Unknown_Player"));
+        assert_eq!(players["Unknown_Player"]["boost"], json!(50));
+        assert_eq!(players["Unknown_Player"]["score"], json!(10));
+    }
+
+    #[test]
+    fn player_telemetry_ignores_team_objects_with_name_and_score() {
+        let raw = json!({
+            "Event": "UpdateState",
+            "Data": {
+                "Game": {
+                    "Teams": [
+                        {"Name": "ECLIPSE TOTAL", "Score": 4},
+                        {"Name": "NEO TOKYO", "Score": 1}
+                    ]
+                },
+                "Players": [
+                    {
+                        "Name": "Chipper",
+                        "PrimaryId": "Unknown|0|0",
+                        "Boost": 42
+                    }
+                ]
+            }
+        });
+
+        let telemetry = extract_player_telemetry(&raw);
+        let Some(players) = telemetry.as_object() else {
+            return;
+        };
+
+        assert!(players.contains_key("Bot_Chipper"));
+        assert!(!players.contains_key("Bot_ECLIPSE TOTAL"));
+        assert!(!players.contains_key("Bot_NEO TOKYO"));
     }
 
     #[test]
