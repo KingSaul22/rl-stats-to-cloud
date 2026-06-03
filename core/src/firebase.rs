@@ -1,4 +1,5 @@
 use crate::connector::{EventSink, SinkError};
+use crate::firebase_auth::FirebaseAuth;
 use async_trait::async_trait;
 use reqwest::Client;
 use reqwest::StatusCode;
@@ -8,16 +9,22 @@ use std::time::Duration;
 #[derive(Clone)]
 pub struct FirebaseConnector {
     base_url: String,
-    auth_token: Option<String>,
+    auth: FirebaseAuth,
     http: Client,
 }
 
 impl FirebaseConnector {
-    pub fn new(firebase_url: impl Into<String>, firebase_auth_token: Option<String>) -> Self {
+    /// Creates a Firebase connector and performs an initial authentication login.
+    ///
+    /// # Errors
+    /// Returns an error if Firebase authentication login fails.
+    pub async fn new(
+        firebase_url: impl Into<String>,
+        api_key: String,
+        email: String,
+        password: String,
+    ) -> Result<Self, crate::firebase_auth::AuthError> {
         let base_url = firebase_url.into().trim_end_matches('/').to_string();
-        let auth_token = firebase_auth_token
-            .map(|token| token.trim().to_string())
-            .filter(|token| !token.is_empty());
         let http = match Client::builder().timeout(Duration::from_secs(5)).build() {
             Ok(client) => client,
             Err(err) => {
@@ -27,12 +34,14 @@ impl FirebaseConnector {
                 Client::new()
             }
         };
+        let auth = FirebaseAuth::new(api_key, email, password);
+        auth.login().await?;
 
-        Self {
+        Ok(Self {
             base_url,
-            auth_token,
+            auth,
             http,
-        }
+        })
     }
 
     async fn push_event(&self, event_type: &str, payload: &Value) -> Result<(), SinkError> {
@@ -44,8 +53,13 @@ impl FirebaseConnector {
 
         let route = FirebaseRoute::from_event_type(event_type);
         let endpoint = route.endpoint_path(match_id);
+        let auth_token = self.auth.get_token().await.map_err(|err| {
+            let message = format!("firebase auth token retrieval failed: {err}");
+            eprintln!("Firebase push warning: {message}");
+            SinkError::transient(message)
+        })?;
 
-        let url = self.build_json_url(&endpoint);
+        let url = self.build_json_url(&endpoint, &auth_token);
         let redacted_url = Self::redact_url(&url);
 
         let request = match route {
@@ -54,8 +68,8 @@ impl FirebaseConnector {
         };
 
         let response = request.json(payload).send().await.map_err(|err| {
-            let mapped = self.map_reqwest_error(&err);
-            let err_message = self.redact_message(&err.to_string());
+            let mapped = Self::map_reqwest_error(&err);
+            let err_message = Self::redact_message(&err.to_string());
             eprintln!("Firebase push warning: failed to send to {redacted_url} ({err_message})");
             mapped
         })?;
@@ -73,13 +87,8 @@ impl FirebaseConnector {
         Ok(())
     }
 
-    fn build_json_url(&self, endpoint_path: &str) -> String {
-        let mut url = format!("{}/{}.json", self.base_url, endpoint_path);
-        if let Some(token) = &self.auth_token {
-            url.push_str("?auth=");
-            url.push_str(token);
-        }
-        url
+    fn build_json_url(&self, endpoint_path: &str, auth_token: &str) -> String {
+        format!("{}/{}.json?auth={auth_token}", self.base_url, endpoint_path)
     }
 
     fn redact_url(url: &str) -> String {
@@ -98,21 +107,16 @@ impl FirebaseConnector {
         )
     }
 
-    fn redact_message(&self, message: &str) -> String {
-        let mut output = message.to_string();
-        if let Some(token) = &self.auth_token {
-            output = output.replace(token, "[REDACTED]");
-        }
-
-        output
+    fn redact_message(message: &str) -> String {
+        Self::redact_url(message)
     }
 
-    fn map_reqwest_error(&self, err: &reqwest::Error) -> SinkError {
+    fn map_reqwest_error(err: &reqwest::Error) -> SinkError {
         if let Some(status) = err.status() {
-            return Self::map_status_error(status, &self.redact_message(&err.to_string()));
+            return Self::map_status_error(status, &Self::redact_message(&err.to_string()));
         }
 
-        let redacted = self.redact_message(&err.to_string());
+        let redacted = Self::redact_message(&err.to_string());
         if err.is_timeout() || err.is_connect() || err.is_request() {
             SinkError::transient(redacted)
         } else {
