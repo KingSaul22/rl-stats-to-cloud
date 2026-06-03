@@ -700,12 +700,14 @@ mod tests {
             "time_remaining_seconds": 123,
             "blue": 2,
             "orange": 1,
-            "player_state": {
-                "player_id": "player_1_id",
-                "boost": 85,
-                "score": 450,
-                "goals": 1
-            }
+            "Players": [
+                {
+                    "PrimaryId": "player_1_id",
+                    "boost": 85,
+                    "score": 450,
+                    "goals": 1
+                }
+            ]
         });
 
         let normalized = normalize_payload(
