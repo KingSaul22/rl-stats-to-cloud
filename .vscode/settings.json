@@ -54,6 +54,10 @@
     "/^cargo test -p rl_stats_core firebase::tests$/": {
       "approve": true,
       "matchCommandLine": true
+    },
+    "/^cargo test --all-features$/": {
+      "approve": true,
+      "matchCommandLine": true
     }
   }
 }
