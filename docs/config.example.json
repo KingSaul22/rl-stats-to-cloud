@@ -1,0 +1,13 @@
+{
+  "isHeadless": false,
+  "websocketUrl": "ws://127.0.0.1:49123",
+  "connector": {
+    "type": "Firebase",
+    "url": "https://your-project.firebaseio.com",
+    "apiKey": "your-firebase-web-api-key",
+    "email": "firebase-user@example.com",
+    "password": "replace-with-secure-password"
+  },
+  "reconnectDelaySeconds": 5,
+  "uiSyncPort": 54321
+}

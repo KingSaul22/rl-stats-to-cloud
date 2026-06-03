@@ -75,3 +75,26 @@ See [docs/pipeline.md](docs/pipeline.md) for the full data plane specification.
 - [Operations](docs/operations.md) — CLI control, lifecycle management, auto-timeout
 - [Development](docs/development.md) — validation, linting, dependency management
 - [ADR: Three-Lane Pipeline](docs/decisions/0001-three-lane-pipeline.md) — why we split telemetry
+
+## Configuration
+
+On first run, the daemon creates `config.json` in the platform config directory.
+Use Firebase REST Authentication fields under the `connector` object:
+
+```json
+{
+        "isHeadless": false,
+        "websocketUrl": "ws://127.0.0.1:49123",
+        "connector": {
+                "type": "Firebase",
+                "url": "https://<project>.firebaseio.com",
+                "apiKey": "<firebase-web-api-key>",
+                "email": "<firebase-user-email>",
+                "password": "<firebase-user-password>"
+        },
+        "reconnectDelaySeconds": 5,
+        "uiSyncPort": 54321
+}
+```
+
+A full sample is available in `docs/config.example.json`.
