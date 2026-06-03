@@ -45,7 +45,7 @@ impl RocketLeagueEvent {
             "GoalReplayStart" => Self::GoalReplayStart,
             // Mapeamos el fin de la repetición de forma segura
             "GoalReplayEnd" => Self::GoalReplayEnd,
-            "GoalReplayWillEnd" => Self::GoalReplayWillEnd, 
+            "GoalReplayWillEnd" => Self::GoalReplayWillEnd,
             // Soportamos tanto el nombre oficial como el alias corto de gol
             "GoalScored" | "Goal" => Self::GoalScored,
             "MatchCreated" => Self::MatchCreated,
