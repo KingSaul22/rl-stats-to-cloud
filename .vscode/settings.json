@@ -82,6 +82,43 @@
     "/^cargo clippy -p rl_stats_core --all-targets --all-features -- -D warnings -D clippy::all -D clippy::pedantic -D clippy::nursery; cargo test --all-features 2>&1; cargo clippy --all-targets --all-features -- -D warnings -D clippy::all -D clippy::pedantic -D clippy::nursery 2>&1$/": {
       "approve": true,
       "matchCommandLine": true
-    }
+    },
+    "/^cargo test -p rl_stats_core$/": {
+      "approve": true,
+      "matchCommandLine": true
+    },
+    "/^bun run tsc$/": {
+      "approve": true,
+      "matchCommandLine": true
+    },
+    "/^bun run build$/": {
+      "approve": true,
+      "matchCommandLine": true
+    },
+    "/^cargo test --all-features --verbose$/": {
+      "approve": true,
+      "matchCommandLine": true
+    },
+    "/^cargo fmt --all -- --check; if \\(\\$LASTEXITCODE -ne 0\\) \\{ exit \\$LASTEXITCODE \\}; cargo clippy --all-targets --all-features -- -D warnings -D clippy::all -D clippy::pedantic -D clippy::nursery; if \\(\\$LASTEXITCODE -ne 0\\) \\{ exit \\$LASTEXITCODE \\}; cargo test --all-features --verbose$/": {
+      "approve": true,
+      "matchCommandLine": true
+    },
+    "/^cargo fmt --all; if \\(\\$LASTEXITCODE -ne 0\\) \\{ exit \\$LASTEXITCODE \\}; cargo clippy --all-targets --all-features -- -D warnings -D clippy::all -D clippy::pedantic -D clippy::nursery; if \\(\\$LASTEXITCODE -ne 0\\) \\{ exit \\$LASTEXITCODE \\}; cargo test --all-features --verbose$/": {
+      "approve": true,
+      "matchCommandLine": true
+    },
+    "/^cargo clippy --all-targets --all-features -- -D warnings -D clippy::all -D clippy::pedantic -D clippy::nursery; if \\(\\$LASTEXITCODE -ne 0\\) \\{ exit \\$LASTEXITCODE \\}; cargo test --all-features --verbose$/": {
+      "approve": true,
+      "matchCommandLine": true
+    },
+    "/^cargo test -p rl_stats_core route_envelope_mirrors_statfeed_to_historical_lane route_envelope_mirrors_goal_to_event_feed_lane classify_event_segments_lanes_cleanly$/": {
+      "approve": true,
+      "matchCommandLine": true
+    },
+    "/^cargo test -p rl_stats_core route_envelope_mirrors$/": {
+      "approve": true,
+      "matchCommandLine": true
+    },
+    "cargo test": true
   }
 }
