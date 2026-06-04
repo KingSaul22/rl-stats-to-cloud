@@ -19,6 +19,7 @@ use tracing::{error, warn};
 use url::Url;
 
 mod actors;
+mod aggregation;
 mod context;
 mod events;
 mod transformer;
@@ -38,6 +39,7 @@ const RETRY_BACKOFF_BASE_SECONDS: u64 = 1;
 const RETRY_BACKOFF_MAX_SECONDS: u64 = 32;
 const EVENT_FEED_MAX_FAILURES: u32 = 3;
 const COMPACTION_MAX_FAILURES: u32 = 3;
+const AGGREGATION_MAX_FAILURES: u32 = 3;
 const COMPACTION_TARGETS: [&str; 2] = ["live_state", "live_events_feed"];
 const COMPACTION_FLUSH_TIMEOUT: Duration = Duration::from_secs(2);
 
@@ -619,6 +621,11 @@ impl RocketLeagueWorker {
             if *last_compaction_seq < *sequence {
                 Self::flush_transient_lanes(lanes, shutdown, *sequence, reason).await;
 
+                let snapshot = Self::request_live_state_snapshot(&lanes.live_state, shutdown).await;
+                if let Some(state) = snapshot {
+                    aggregation::upload_aggregation(sink, previous_match_id.as_str(), &state, shutdown).await;
+                }
+
                 if let Err(err) = Self::compact_transient_nodes(
                     sink,
                     shutdown,
@@ -838,6 +845,37 @@ impl RocketLeagueWorker {
         }
     }
 
+    async fn request_live_state_snapshot(
+        lane: &mpsc::Sender<TransientLaneMessage>,
+        shutdown: &CancellationToken,
+    ) -> Option<Value> {
+        let (sender, receiver) = oneshot::channel();
+        tokio::select! {
+            () = shutdown.cancelled() => None,
+            send_result = timeout(
+                COMPACTION_FLUSH_TIMEOUT,
+                lane.send(TransientLaneMessage::Snapshot { result: sender }),
+            ) => {
+                match send_result {
+                    Ok(Ok(())) => {
+                        tokio::select! {
+                            () = shutdown.cancelled() => None,
+                            recv_result = receiver => recv_result.ok(),
+                        }
+                    }
+                    Ok(Err(_)) => {
+                        eprintln!("Compaction warning: failed to request live-state snapshot because lane is closed.");
+                        None
+                    }
+                    Err(_) => {
+                        eprintln!("Compaction warning: timeout requesting live-state snapshot. Proceeding with cleanup.");
+                        None
+                    }
+                }
+            }
+        }
+    }
+
     fn route_envelope(
         envelope: IngestEnvelope,
         lanes: &RoutingLanes,
@@ -944,6 +982,9 @@ impl RocketLeagueWorker {
                 TransientLaneMessage::Flush { .. } => {
                     warn!("Unexpected flush control message observed in event-feed fast path.");
                 }
+                TransientLaneMessage::Snapshot { .. } => {
+                    warn!("Unexpected snapshot control message observed in event-feed fast path.");
+                }
             },
             Err(TrySendError::Closed(message)) => match message {
                 TransientLaneMessage::Event(dropped) => {
@@ -954,6 +995,9 @@ impl RocketLeagueWorker {
                 }
                 TransientLaneMessage::Flush { .. } => {
                     warn!("Unexpected flush control message observed in event-feed fast path.");
+                }
+                TransientLaneMessage::Snapshot { .. } => {
+                    warn!("Unexpected snapshot control message observed in event-feed fast path.");
                 }
             },
         }
