@@ -1,6 +1,6 @@
 use super::events::{IngestEnvelope, TransientLaneMessage};
 use super::{EVENT_FEED_MAX_FAILURES, RETRY_BACKOFF_BASE_SECONDS, RETRY_BACKOFF_MAX_SECONDS};
-use crate::connector::{SinkError, TelemetrySink};
+use crate::connector::{SinkError, SinkLane, TelemetrySink};
 use serde_json::{Map, Value};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -93,10 +93,10 @@ async fn process_live_state_envelope(
     let payload_to_send = update_live_state_cache(master_state, cached_match_id, envelope);
 
     if let Err(err) = sink
-        .send_event(&envelope.event_type, &payload_to_send)
+        .send_event_on_lane(SinkLane::LiveState, &envelope.event_type, &payload_to_send)
         .await
     {
-        log_sink_failure("live_state", envelope, &err);
+        log_sink_failure(SinkLane::LiveState, envelope, &err);
     }
 }
 
@@ -116,7 +116,7 @@ pub(super) async fn run_event_feed_actor(
                 match message {
                     TransientLaneMessage::Event(envelope) => {
                         send_with_retry_policy(
-                            "event_feed",
+                            SinkLane::EventFeed,
                             &envelope,
                             &sink,
                             &shutdown,
@@ -147,14 +147,15 @@ pub(super) async fn run_historical_actor(
                     break;
                 };
 
-                send_with_retry_policy("historical", &envelope, &sink, &shutdown, None).await;
+                send_with_retry_policy(SinkLane::Historical, &envelope, &sink, &shutdown, None)
+                    .await;
             }
         }
     }
 }
 
 pub(super) async fn send_with_retry_policy(
-    lane: &str,
+    lane: SinkLane,
     envelope: &IngestEnvelope,
     sink: &Arc<dyn TelemetrySink + Send + Sync>,
     shutdown: &CancellationToken,
@@ -169,12 +170,19 @@ pub(super) async fn send_with_retry_policy(
 
         let payload: &Value = &envelope.payload;
 
-        match sink.send_event(&envelope.event_type, payload).await {
+        match sink
+            .send_event_on_lane(lane, &envelope.event_type, payload)
+            .await
+        {
             Ok(()) => return,
             Err(SinkError::Terminal { message }) => {
                 eprintln!(
                     "Sink terminal error [{lane}] seq={} event={} match_id={} dropped payload: {}",
-                    envelope.seq, envelope.event_type, envelope.active_match_id, message
+                    envelope.seq,
+                    envelope.event_type,
+                    envelope.active_match_id,
+                    message,
+                    lane = lane.as_str()
                 );
                 return;
             }
@@ -189,7 +197,8 @@ pub(super) async fn send_with_retry_policy(
                         envelope.event_type,
                         envelope.active_match_id,
                         consecutive_failures,
-                        message
+                        message,
+                        lane = lane.as_str()
                     );
                     return;
                 }
@@ -202,7 +211,8 @@ pub(super) async fn send_with_retry_policy(
                     envelope.active_match_id,
                     consecutive_failures,
                     backoff_delay.as_millis(),
-                    message
+                    message,
+                    lane = lane.as_str()
                 );
 
                 tokio::select! {
@@ -244,18 +254,26 @@ pub(super) fn sample_uniform_jitter_millis(max_millis_inclusive: u64) -> u64 {
     u64::try_from(sampled).map_or(max_millis_inclusive, |value| value)
 }
 
-pub(super) fn log_sink_failure(lane: &str, envelope: &IngestEnvelope, error: &SinkError) {
+pub(super) fn log_sink_failure(lane: SinkLane, envelope: &IngestEnvelope, error: &SinkError) {
     match error {
         SinkError::RateLimited { message } | SinkError::TransientNetwork { message } => {
             eprintln!(
                 "Sink warning [{lane}] seq={} event={} match_id={} error={} (backoff TODO).",
-                envelope.seq, envelope.event_type, envelope.active_match_id, message
+                envelope.seq,
+                envelope.event_type,
+                envelope.active_match_id,
+                message,
+                lane = lane.as_str()
             );
         }
         SinkError::Terminal { message } => {
             eprintln!(
                 "Sink terminal error [{lane}] seq={} event={} match_id={} dropped payload: {}",
-                envelope.seq, envelope.event_type, envelope.active_match_id, message
+                envelope.seq,
+                envelope.event_type,
+                envelope.active_match_id,
+                message,
+                lane = lane.as_str()
             );
         }
     }
