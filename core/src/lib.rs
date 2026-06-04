@@ -4,6 +4,7 @@ pub mod connector;
 pub mod daemon;
 pub mod firebase;
 pub mod firebase_auth;
+pub mod models;
 #[path = "worker/mod.rs"]
 pub mod worker;
 
