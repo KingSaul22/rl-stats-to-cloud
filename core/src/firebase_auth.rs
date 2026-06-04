@@ -9,7 +9,8 @@ use std::time::Duration;
 use std::time::SystemTime;
 use tokio::sync::RwLock;
 
-const LOGIN_ENDPOINT: &str = "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword";
+const LOGIN_ENDPOINT: &str =
+    "https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword";
 const REFRESH_ENDPOINT: &str = "https://securetoken.googleapis.com/v1/token";
 const REFRESH_MARGIN: Duration = Duration::from_mins(5);
 

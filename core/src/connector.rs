@@ -97,6 +97,6 @@ pub async fn connector_factory(config: &ConnectorConfig) -> Arc<dyn EventSink + 
                 );
                 Arc::new(NullSink)
             }
-        }
+        },
     }
 }
