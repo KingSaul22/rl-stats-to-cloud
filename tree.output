@@ -6,6 +6,7 @@ C:\USERS\SAUL\SOURCE\REPOS\TFG\RL-STATS-TO-CLOUD-RUST
 |   bun.lock
 |   Cargo.lock
 |   Cargo.toml
+|   deny.toml
 |   index.html
 |   package.json
 |   README.md
@@ -15,6 +16,9 @@ C:\USERS\SAUL\SOURCE\REPOS\TFG\RL-STATS-TO-CLOUD-RUST
 |   vite.config.ts
 |   
 +---.agents
+|
++---.githooks
+|       pre-commit
 |
 +---.github
 |   \---workflows
@@ -33,6 +37,7 @@ C:\USERS\SAUL\SOURCE\REPOS\TFG\RL-STATS-TO-CLOUD-RUST
 |   \---src
 |       |   config.rs
 |       |   connector.rs
+|       |   firebase_auth.rs
 |       |   firebase.rs
 |       |   lib.rs
 |       |   main.rs
@@ -75,6 +80,9 @@ C:\USERS\SAUL\SOURCE\REPOS\TFG\RL-STATS-TO-CLOUD-RUST
 |       
 +---public
 |       favicon.png
+|       
++---scripts
+|       check-no-sync-socket-async.sh
 |       
 +---src
 |   |   api.ts
