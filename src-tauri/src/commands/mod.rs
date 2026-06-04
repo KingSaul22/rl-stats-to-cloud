@@ -1,4 +1,4 @@
-use crate::bridge::request_poweroff;
+use crate::bridge::{request_poweroff, request_provide_password};
 use crate::{SharedConfig, SharedConfigManager};
 use rl_stats_core::{AppConfig, AppState, StateReceiver};
 
@@ -27,8 +27,27 @@ pub async fn save_config(
     config: tauri::State<'_, SharedConfigManager>,
     shared_config: tauri::State<'_, SharedConfig>,
 ) -> Result<(), String> {
+    let password_to_forward = match &new_config.connector {
+        rl_stats_core::config::ConnectorConfig::Firebase { password, .. } => {
+            password.clone().unwrap_or_default()
+        }
+    };
+
+    request_provide_password(password_to_forward)
+        .await
+        .map_err(|err| format!("failed to forward password to daemon: {err}"))?;
+
+    let mut config_to_persist = new_config.clone();
+    if !config_to_persist.remember_password {
+        match &mut config_to_persist.connector {
+            rl_stats_core::config::ConnectorConfig::Firebase { password, .. } => {
+                *password = None;
+            }
+        }
+    }
+
     config
-        .save(&new_config)
+        .save(&config_to_persist)
         .map_err(|err| format!("failed to save config: {err}"))?;
 
     // Runtime note: the daemon currently wires sink/transport config at startup.

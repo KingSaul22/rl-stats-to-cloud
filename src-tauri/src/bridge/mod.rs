@@ -24,6 +24,10 @@ pub(crate) async fn request_poweroff() -> Result<(), String> {
     transport::request_poweroff().await
 }
 
+pub(crate) async fn request_provide_password(password: String) -> Result<(), String> {
+    transport::request_provide_password(password).await
+}
+
 #[tauri::command]
 fn greet(name: &str) -> String {
     format!("Hello, {name}! You've been greeted from Rust!")
