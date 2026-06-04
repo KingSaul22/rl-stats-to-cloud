@@ -14,16 +14,8 @@ pub struct FirebaseConnector {
 }
 
 impl FirebaseConnector {
-    /// Creates a Firebase connector and performs an initial authentication login.
-    ///
-    /// # Errors
-    /// Returns an error if Firebase authentication login fails.
-    pub async fn new(
-        firebase_url: impl Into<String>,
-        api_key: String,
-        email: String,
-        password: String,
-    ) -> Result<Self, crate::firebase_auth::AuthError> {
+    #[must_use]
+    pub fn new(firebase_url: impl Into<String>, auth: FirebaseAuth) -> Self {
         let base_url = firebase_url.into().trim_end_matches('/').to_string();
         let http = match Client::builder().timeout(Duration::from_secs(5)).build() {
             Ok(client) => client,
@@ -34,14 +26,12 @@ impl FirebaseConnector {
                 Client::new()
             }
         };
-        let auth = FirebaseAuth::new(api_key, email, password);
-        auth.login().await?;
 
-        Ok(Self {
+        Self {
             base_url,
             auth,
             http,
-        })
+        }
     }
 
     async fn push_event(

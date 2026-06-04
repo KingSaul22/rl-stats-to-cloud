@@ -10,7 +10,7 @@ pub mod worker;
 pub use config::{AppConfig, ConfigManager, default_config_path};
 pub use connector::{EventSink, SinkReceiver, SinkSender, connector_factory};
 pub use firebase::FirebaseConnector;
-pub use firebase_auth::{AuthError, FirebaseAuth, TokenState};
+pub use firebase_auth::{AuthError, AuthRuntimeState, FirebaseAuth, TokenState};
 use serde::{Deserialize, Serialize};
 pub use worker::RocketLeagueWorker;
 

@@ -1,7 +1,7 @@
 use rl_stats_core::daemon::{ControlCommand, execute_control_command, run_daemon};
 use rl_stats_core::{AppConfig, ConfigManager, default_config_path};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum ProcessMode {
     Daemon,
     Command(ControlCommand),
@@ -11,7 +11,7 @@ fn main() {
     let mode = parse_mode(std::env::args().skip(1));
 
     if let ProcessMode::Command(command) = mode {
-        execute_control_command(command);
+        execute_control_command(&command);
         return;
     }
 
