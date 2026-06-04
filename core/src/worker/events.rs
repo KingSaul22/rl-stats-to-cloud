@@ -1,5 +1,6 @@
 use serde::Deserialize;
 use serde_json::Value;
+use tokio::sync::oneshot;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IngestClass {
@@ -82,17 +83,10 @@ pub struct IngestEnvelope {
     pub(crate) active_match_id: String,
 }
 
-impl IngestEnvelope {
-    #[must_use]
-    pub(crate) fn bootstrap() -> Self {
-        Self {
-            seq: 0,
-            event_type: "__bootstrap__".to_string(),
-            payload: Value::Null,
-            class: IngestClass::LiveState,
-            active_match_id: String::new(),
-        }
-    }
+#[derive(Debug)]
+pub enum TransientLaneMessage {
+    Event(IngestEnvelope),
+    Flush { ack: oneshot::Sender<()> },
 }
 
 #[cfg(test)]
