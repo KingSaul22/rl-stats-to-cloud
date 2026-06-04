@@ -1,4 +1,7 @@
-use crate::{AppConfig, AppState, RocketLeagueWorker, StateReceiver, connector_factory};
+use crate::{
+    AppConfig, AppState, FirebaseAuth, RocketLeagueWorker, StateReceiver,
+    connector::connector_factory_with_auth,
+};
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::sync::Mutex as AsyncMutex;
@@ -32,6 +35,7 @@ struct UiServerControl {
     bind_addr: String,
     state_receiver: StateReceiver,
     server_task: Option<UiServerTask>,
+    auth: Option<FirebaseAuth>,
 }
 
 pub fn run_daemon(config: AppConfig) {
@@ -70,10 +74,12 @@ impl DaemonSupervisor {
         };
 
         let (state_sender, state_receiver) = tokio::sync::watch::channel(AppState::default());
+        let (initial_sink, auth) = connector_factory_with_auth(&self.config.connector);
         let ui_control = Arc::new(AsyncMutex::new(UiServerControl {
             bind_addr: format!("127.0.0.1:{}", self.config.ui_sync_port),
             state_receiver: state_receiver.clone(),
             server_task: None,
+            auth,
         }));
 
         let shutdown = self.shutdown.clone();
@@ -88,7 +94,6 @@ impl DaemonSupervisor {
             .await;
         });
 
-        let initial_sink = connector_factory(&self.config.connector).await;
         let (_sink_sender, sink_receiver) = tokio::sync::watch::channel(initial_sink);
         let worker = RocketLeagueWorker::from_config(&self.config, state_sender, sink_receiver);
         let worker_shutdown = self.shutdown.clone();
@@ -139,6 +144,12 @@ mod tests {
 
         let parsed: ControlCommand = serde_json::from_str(&value)?;
         assert_eq!(parsed, ControlCommand::AllowUi);
+
+        let provide_password = ControlCommand::ProvidePassword("secret".to_string());
+        let provide_password_value = serde_json::to_string(&provide_password)?;
+        let provide_password_parsed: ControlCommand =
+            serde_json::from_str(&provide_password_value)?;
+        assert_eq!(provide_password_parsed, provide_password);
         Ok(())
     }
 }
