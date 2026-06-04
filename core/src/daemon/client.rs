@@ -3,14 +3,14 @@ use super::{CONTROL_BIND_ADDR, control_endpoint_display};
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpStream as StdTcpStream;
 
-pub fn execute_control_command(command: ControlCommand) {
+pub fn execute_control_command(command: &ControlCommand) {
     let reply = send_control_command(command);
     print_control_reply(command, &reply);
 }
 
 // This client is intentionally synchronous because it is used by the CLI path in
 // core/src/main.rs, not by Tokio async runtime tasks.
-pub(super) fn send_control_command(command: ControlCommand) -> ControlReply {
+pub(super) fn send_control_command(command: &ControlCommand) -> ControlReply {
     let endpoint_display = control_endpoint_display();
     let mut stream = match StdTcpStream::connect(CONTROL_BIND_ADDR) {
         Ok(stream) => stream,
@@ -67,11 +67,12 @@ pub(super) fn send_control_command(command: ControlCommand) -> ControlReply {
     }
 }
 
-pub(super) fn print_control_reply(command: ControlCommand, reply: &ControlReply) {
+pub(super) fn print_control_reply(command: &ControlCommand, reply: &ControlReply) {
     let command_name = match command {
         ControlCommand::AllowUi => "allow-ui",
         ControlCommand::DisallowUi => "disallow-ui",
         ControlCommand::Poweroff => "poweroff",
+        ControlCommand::ProvidePassword(_) => "provide-password",
     };
 
     match reply {

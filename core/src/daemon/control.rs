@@ -150,6 +150,29 @@ pub(super) async fn dispatch_control_command(
                 message: "Poweroff acknowledged. Daemon shutdown initiated.".to_string(),
             }
         }
+        ControlCommand::ProvidePassword(password) => {
+            let auth = {
+                let guard = ui_control.lock().await;
+                guard.auth.clone()
+            };
+
+            match auth {
+                Some(auth) => match auth.update_credentials(password).await {
+                    Ok(()) => ControlReply::Ok {
+                        message: "ProvidePassword acknowledged. Credentials updated.".to_string(),
+                    },
+                    Err(err) => ControlReply::Error {
+                        message: format!(
+                            "ProvidePassword failed to authenticate with supplied credentials: {err}"
+                        ),
+                    },
+                },
+                None => ControlReply::Error {
+                    message: "ProvidePassword is unsupported for the current connector."
+                        .to_string(),
+                },
+            }
+        }
     }
 }
 
