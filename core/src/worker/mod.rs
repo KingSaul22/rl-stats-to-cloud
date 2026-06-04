@@ -623,7 +623,13 @@ impl RocketLeagueWorker {
 
                 let snapshot = Self::request_live_state_snapshot(&lanes.live_state, shutdown).await;
                 if let Some(state) = snapshot {
-                    aggregation::upload_aggregation(sink, previous_match_id.as_str(), &state, shutdown).await;
+                    let has_players = state
+                        .get("player_telemetry")
+                        .and_then(Value::as_object)
+                        .is_some_and(|obj| !obj.is_empty());
+                    if has_players {
+                        aggregation::upload_aggregation(sink, previous_match_id.as_str(), &state, shutdown).await;
+                    }
                 }
 
                 if let Err(err) = Self::compact_transient_nodes(
@@ -887,8 +893,12 @@ impl RocketLeagueWorker {
         match envelope.class {
             IngestClass::LiveState => Self::try_send_live_state(envelope, lanes, routing_stats),
             IngestClass::EventFeed => {
-                let historical_copy = should_mirror.then(|| envelope.clone());
-                Self::try_send_event_feed(envelope, lanes, routing_stats);
+                let is_lifecycle = Self::is_lifecycle_event(envelope.event_type.as_str());
+                let should_send_to_historical = is_lifecycle || should_mirror;
+                let historical_copy = should_send_to_historical.then(|| envelope.clone());
+                if !is_lifecycle {
+                    Self::try_send_event_feed(envelope, lanes, routing_stats);
+                }
                 if let Some(copy) = historical_copy {
                     let enriched =
                         Self::enrich_historical_timing(copy, cached_game_seconds_remaining);
@@ -896,7 +906,8 @@ impl RocketLeagueWorker {
                 }
             }
             IngestClass::Historical => {
-                let event_feed_copy = should_mirror.then(|| envelope.clone());
+                let is_lifecycle = Self::is_lifecycle_event(envelope.event_type.as_str());
+                let event_feed_copy = (!is_lifecycle).then(|| should_mirror.then(|| envelope.clone())).flatten();
                 let enriched =
                     Self::enrich_historical_timing(envelope, cached_game_seconds_remaining);
                 Self::try_send_historical(enriched, lanes, routing_stats);
@@ -1037,6 +1048,10 @@ impl RocketLeagueWorker {
                 | "MatchEnded"
                 | "PodiumStart"
         )
+    }
+
+    fn is_lifecycle_event(event_type: &str) -> bool {
+        matches!(event_type, "MatchEnded" | "MatchDestroyed" | "MatchInitialized")
     }
 
     const fn classify_event(event: &RocketLeagueEvent) -> IngestClass {
