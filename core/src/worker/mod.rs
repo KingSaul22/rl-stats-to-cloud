@@ -122,6 +122,7 @@ impl RocketLeagueWorker {
         let mut routing_stats = RoutingStats::default();
         let mut sequence = 0_u64;
         let mut last_compaction_seq = 0_u64;
+        let mut cached_game_seconds_remaining = None;
 
         loop {
             if shutdown.is_cancelled() {
@@ -140,6 +141,7 @@ impl RocketLeagueWorker {
                     &sink,
                     &mut sequence,
                     &mut last_compaction_seq,
+                    &mut cached_game_seconds_remaining,
                     &mut session_context,
                     &mut routing_stats,
                 ) => result,
@@ -203,6 +205,7 @@ impl RocketLeagueWorker {
         sink: &Arc<dyn TelemetrySink + Send + Sync>,
         sequence: &mut u64,
         last_compaction_seq: &mut u64,
+        cached_game_seconds_remaining: &mut Option<u64>,
         session_context: &mut SessionContext,
         routing_stats: &mut RoutingStats,
     ) -> Result<(), String> {
@@ -214,6 +217,7 @@ impl RocketLeagueWorker {
                     sink,
                     sequence,
                     last_compaction_seq,
+                    cached_game_seconds_remaining,
                     session_context,
                     routing_stats,
                 )
@@ -227,6 +231,7 @@ impl RocketLeagueWorker {
                 sink,
                 sequence,
                 last_compaction_seq,
+                cached_game_seconds_remaining,
                 session_context,
                 routing_stats,
             )
@@ -244,6 +249,7 @@ impl RocketLeagueWorker {
                         sink,
                         sequence,
                         last_compaction_seq,
+                        cached_game_seconds_remaining,
                         session_context,
                         routing_stats,
                     )
@@ -266,6 +272,7 @@ impl RocketLeagueWorker {
         sink: &Arc<dyn TelemetrySink + Send + Sync>,
         sequence: &mut u64,
         last_compaction_seq: &mut u64,
+        cached_game_seconds_remaining: &mut Option<u64>,
         session_context: &mut SessionContext,
         routing_stats: &mut RoutingStats,
     ) -> Result<(), String> {
@@ -302,6 +309,7 @@ impl RocketLeagueWorker {
                         sink,
                         sequence,
                         last_compaction_seq,
+                        cached_game_seconds_remaining,
                         session_context,
                         routing_stats,
                     )
@@ -316,6 +324,7 @@ impl RocketLeagueWorker {
                             sink,
                             sequence,
                             last_compaction_seq,
+                            cached_game_seconds_remaining,
                             session_context,
                             routing_stats,
                         )
@@ -351,6 +360,7 @@ impl RocketLeagueWorker {
         sink: &Arc<dyn TelemetrySink + Send + Sync>,
         sequence: &mut u64,
         last_compaction_seq: &mut u64,
+        cached_game_seconds_remaining: &mut Option<u64>,
         session_context: &mut SessionContext,
         routing_stats: &mut RoutingStats,
     ) -> Result<(), String> {
@@ -392,6 +402,7 @@ impl RocketLeagueWorker {
                 sink,
                 sequence,
                 last_compaction_seq,
+                cached_game_seconds_remaining,
                 session_context,
                 routing_stats,
             )
@@ -456,6 +467,7 @@ impl RocketLeagueWorker {
         sink: &Arc<dyn TelemetrySink + Send + Sync>,
         sequence: &mut u64,
         last_compaction_seq: &mut u64,
+        cached_game_seconds_remaining: &mut Option<u64>,
         session_context: &mut SessionContext,
         routing_stats: &mut RoutingStats,
     ) {
@@ -477,6 +489,7 @@ impl RocketLeagueWorker {
                         sink,
                         sequence,
                         last_compaction_seq,
+                        cached_game_seconds_remaining,
                         session_context,
                         routing_stats,
                     )
@@ -514,6 +527,7 @@ impl RocketLeagueWorker {
         sink: &Arc<dyn TelemetrySink + Send + Sync>,
         sequence: &mut u64,
         last_compaction_seq: &mut u64,
+        cached_game_seconds_remaining: &mut Option<u64>,
         session_context: &mut SessionContext,
         routing_stats: &mut RoutingStats,
     ) {
@@ -532,6 +546,7 @@ impl RocketLeagueWorker {
             sink,
             sequence,
             last_compaction_seq,
+            cached_game_seconds_remaining,
             session_context,
             routing_stats,
         )
@@ -550,6 +565,7 @@ impl RocketLeagueWorker {
         sink: &Arc<dyn TelemetrySink + Send + Sync>,
         sequence: &mut u64,
         last_compaction_seq: &mut u64,
+        cached_game_seconds_remaining: &mut Option<u64>,
         session_context: &mut SessionContext,
         routing_stats: &mut RoutingStats,
     ) {
@@ -584,6 +600,10 @@ impl RocketLeagueWorker {
 
         if Self::is_replay_active_in_payload(&parsed) {
             session_context.in_replay = true;
+        }
+
+        if let Some(observed_game_seconds) = transformer::extract_game_seconds_remaining(&parsed) {
+            *cached_game_seconds_remaining = Some(observed_game_seconds);
         }
 
         session_context.update_from_payload(&parsed);
@@ -636,7 +656,12 @@ impl RocketLeagueWorker {
             active_match_id: session_context.active_match_id.clone(),
         };
 
-        Self::route_envelope(envelope, lanes, routing_stats);
+        Self::route_envelope(
+            envelope,
+            lanes,
+            routing_stats,
+            *cached_game_seconds_remaining,
+        );
     }
 
     fn compaction_reason(
@@ -817,6 +842,7 @@ impl RocketLeagueWorker {
         envelope: IngestEnvelope,
         lanes: &RoutingLanes,
         routing_stats: &mut RoutingStats,
+        cached_game_seconds_remaining: Option<u64>,
     ) {
         let should_mirror = Self::is_high_value_historical_event(envelope.event_type.as_str());
 
@@ -826,17 +852,45 @@ impl RocketLeagueWorker {
                 let historical_copy = should_mirror.then(|| envelope.clone());
                 Self::try_send_event_feed(envelope, lanes, routing_stats);
                 if let Some(copy) = historical_copy {
-                    Self::try_send_historical(copy, lanes, routing_stats);
+                    let enriched =
+                        Self::enrich_historical_timing(copy, cached_game_seconds_remaining);
+                    Self::try_send_historical(enriched, lanes, routing_stats);
                 }
             }
             IngestClass::Historical => {
                 let event_feed_copy = should_mirror.then(|| envelope.clone());
-                Self::try_send_historical(envelope, lanes, routing_stats);
+                let enriched =
+                    Self::enrich_historical_timing(envelope, cached_game_seconds_remaining);
+                Self::try_send_historical(enriched, lanes, routing_stats);
                 if let Some(copy) = event_feed_copy {
                     Self::try_send_event_feed(copy, lanes, routing_stats);
                 }
             }
         }
+    }
+
+    fn enrich_historical_timing(
+        mut envelope: IngestEnvelope,
+        cached_game_seconds_remaining: Option<u64>,
+    ) -> IngestEnvelope {
+        let Some(cached_seconds) = cached_game_seconds_remaining else {
+            return envelope;
+        };
+
+        let needs_enrichment = envelope
+            .payload
+            .get("game_seconds_remaining")
+            .and_then(Value::as_u64)
+            .is_none_or(|value| value == 0);
+
+        if needs_enrichment && let Some(payload) = envelope.payload.as_object_mut() {
+            payload.insert(
+                "game_seconds_remaining".to_string(),
+                Value::from(cached_seconds),
+            );
+        }
+
+        envelope
     }
 
     fn try_send_live_state(
@@ -1228,7 +1282,7 @@ mod tests {
             active_match_id: "match_1".to_string(),
         };
 
-        RocketLeagueWorker::route_envelope(envelope, &lanes, &mut routing_stats);
+        RocketLeagueWorker::route_envelope(envelope, &lanes, &mut routing_stats, None);
 
         let feed_message = event_feed_receiver.try_recv();
         assert!(matches!(
@@ -1271,7 +1325,7 @@ mod tests {
             active_match_id: "match_1".to_string(),
         };
 
-        RocketLeagueWorker::route_envelope(envelope, &lanes, &mut routing_stats);
+        RocketLeagueWorker::route_envelope(envelope, &lanes, &mut routing_stats, None);
 
         let historical_message = historical_receiver.try_recv();
         assert!(matches!(
@@ -1292,5 +1346,45 @@ mod tests {
                 ..
             })) if event_type == "GoalScored"
         ));
+    }
+
+    #[test]
+    fn enrich_historical_timing_uses_cached_clock_for_zero_time() {
+        let envelope = IngestEnvelope {
+            seq: 21,
+            event_type: "StatfeedEvent".to_string(),
+            payload: json!({
+                "game_seconds_remaining": 0_u64,
+                "type": "statfeedevent"
+            }),
+            class: IngestClass::EventFeed,
+            active_match_id: "match_1".to_string(),
+        };
+
+        let enriched = RocketLeagueWorker::enrich_historical_timing(envelope, Some(94));
+        assert_eq!(
+            enriched.payload.get("game_seconds_remaining"),
+            Some(&Value::from(94_u64))
+        );
+    }
+
+    #[test]
+    fn enrich_historical_timing_preserves_non_zero_time() {
+        let envelope = IngestEnvelope {
+            seq: 22,
+            event_type: "GoalScored".to_string(),
+            payload: json!({
+                "game_seconds_remaining": 183_u64,
+                "type": "goal"
+            }),
+            class: IngestClass::Historical,
+            active_match_id: "match_1".to_string(),
+        };
+
+        let enriched = RocketLeagueWorker::enrich_historical_timing(envelope, Some(94));
+        assert_eq!(
+            enriched.payload.get("game_seconds_remaining"),
+            Some(&Value::from(183_u64))
+        );
     }
 }
