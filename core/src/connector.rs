@@ -58,6 +58,17 @@ impl Error for SinkError {}
 #[async_trait]
 pub trait EventSink: Send + Sync {
     async fn send_event(&self, event_type: &str, payload: &Value) -> Result<(), SinkError>;
+
+    /// Deletes a connector node when supported by the backend sink.
+    ///
+    /// # Errors
+    /// Returns an error when the sink cannot perform deletes or when the
+    /// underlying connector request fails.
+    async fn delete_node(&self, path: &str) -> Result<(), SinkError> {
+        Err(SinkError::terminal(format!(
+            "sink does not support delete_node for path '{path}'"
+        )))
+    }
 }
 pub use EventSink as TelemetrySink;
 
@@ -70,6 +81,10 @@ pub struct NullSink;
 #[async_trait]
 impl EventSink for NullSink {
     async fn send_event(&self, _event_type: &str, _payload: &Value) -> Result<(), SinkError> {
+        Ok(())
+    }
+
+    async fn delete_node(&self, _path: &str) -> Result<(), SinkError> {
         Ok(())
     }
 }
