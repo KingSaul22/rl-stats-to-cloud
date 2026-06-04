@@ -87,6 +87,42 @@ impl FirebaseConnector {
         Ok(())
     }
 
+    /// Deletes a JSON node in Firebase Realtime Database.
+    ///
+    /// # Errors
+    /// Returns an error when authentication fails, the request cannot be sent,
+    /// or Firebase returns a non-success status code.
+    pub async fn delete_node(&self, path: &str) -> Result<(), SinkError> {
+        let auth_token = self.auth.get_token().await.map_err(|err| {
+            let message = format!("firebase auth token retrieval failed: {err}");
+            eprintln!("Firebase delete warning: {message}");
+            SinkError::transient(message)
+        })?;
+
+        let normalized_path = path.trim_matches('/');
+        let url = self.build_json_url(normalized_path, &auth_token);
+        let redacted_url = Self::redact_url(&url);
+
+        let response = self.http.delete(&url).send().await.map_err(|err| {
+            let mapped = Self::map_reqwest_error(&err);
+            let err_message = Self::redact_message(&err.to_string());
+            eprintln!("Firebase delete warning: failed to send to {redacted_url} ({err_message})");
+            mapped
+        })?;
+
+        if !response.status().is_success() {
+            let mapped = Self::map_status_error(response.status(), &redacted_url);
+            eprintln!(
+                "Firebase delete warning: {} returned status {}",
+                redacted_url,
+                response.status()
+            );
+            return Err(mapped);
+        }
+
+        Ok(())
+    }
+
     fn build_json_url(&self, endpoint_path: &str, auth_token: &str) -> String {
         format!("{}/{}.json?auth={auth_token}", self.base_url, endpoint_path)
     }
@@ -140,6 +176,10 @@ impl FirebaseConnector {
 impl EventSink for FirebaseConnector {
     async fn send_event(&self, event_type: &str, payload: &Value) -> Result<(), SinkError> {
         self.push_event(event_type, payload).await
+    }
+
+    async fn delete_node(&self, path: &str) -> Result<(), SinkError> {
+        Self::delete_node(self, path).await
     }
 }
 
@@ -218,6 +258,15 @@ mod tests {
         assert_eq!(
             FirebaseRoute::EventFeed.endpoint_path("ignored_match"),
             "live_events_feed"
+        );
+    }
+
+    #[test]
+    fn redact_url_masks_delete_auth_token() {
+        let url = "https://example.firebaseio.com/live_state.json?auth=sensitive_token";
+        assert_eq!(
+            FirebaseConnector::redact_url(url),
+            "https://example.firebaseio.com/live_state.json?auth=[REDACTED]"
         );
     }
 }
