@@ -18,6 +18,7 @@ const DOM: {
   connectorApiKey: HTMLInputElement | null;
   connectorEmail: HTMLInputElement | null;
   connectorPassword: HTMLInputElement | null;
+  rememberPassword: HTMLInputElement | null;
   reconnectDelay: HTMLInputElement | null;
   websocketUrl: HTMLInputElement | null;
   uiSyncPort: HTMLInputElement | null;
@@ -33,6 +34,7 @@ const DOM: {
   connectorApiKey: null,
   connectorEmail: null,
   connectorPassword: null,
+  rememberPassword: null,
   reconnectDelay: null,
   websocketUrl: null,
   uiSyncPort: null,
@@ -53,6 +55,7 @@ export function initializeDOMCache(): void {
   DOM.connectorApiKey = document.querySelector<HTMLInputElement>(CONSTANTS.UI_SELECTORS.CONNECTOR_API_KEY);
   DOM.connectorEmail = document.querySelector<HTMLInputElement>(CONSTANTS.UI_SELECTORS.CONNECTOR_EMAIL);
   DOM.connectorPassword = document.querySelector<HTMLInputElement>(CONSTANTS.UI_SELECTORS.CONNECTOR_PASSWORD);
+  DOM.rememberPassword = document.querySelector<HTMLInputElement>(CONSTANTS.UI_SELECTORS.REMEMBER_PASSWORD);
   DOM.reconnectDelay = document.querySelector<HTMLInputElement>(CONSTANTS.UI_SELECTORS.RECONNECT_DELAY);
 
   DOM.websocketUrl = document.querySelector<HTMLInputElement>("#websocket-url");
@@ -126,7 +129,7 @@ export function renderConfigForm(config: AppConfig): void {
   if (
     !DOM.connectorType || !DOM.connectorUrl || !DOM.connectorApiKey ||
     !DOM.connectorEmail || !DOM.connectorPassword ||
-    !DOM.reconnectDelay || !DOM.websocketUrl || !DOM.uiSyncPort || !DOM.isHeadless
+    !DOM.rememberPassword || !DOM.reconnectDelay || !DOM.websocketUrl || !DOM.uiSyncPort || !DOM.isHeadless
   ) {
     return;
   }
@@ -136,6 +139,7 @@ export function renderConfigForm(config: AppConfig): void {
   DOM.connectorApiKey.value = config.connector.apiKey;
   DOM.connectorEmail.value = config.connector.email;
   DOM.connectorPassword.value = config.connector.password;
+  DOM.rememberPassword.checked = config.rememberPassword;
   DOM.reconnectDelay.value = String(config.reconnectDelaySeconds);
   DOM.websocketUrl.value = config.websocketUrl;
   DOM.uiSyncPort.value = String(config.uiSyncPort);
@@ -186,7 +190,7 @@ export function getFormValues(): AppConfig | null {
   if (
     !DOM.connectorType || !DOM.connectorUrl || !DOM.connectorApiKey ||
     !DOM.connectorEmail || !DOM.connectorPassword ||
-    !DOM.reconnectDelay || !DOM.websocketUrl || !DOM.uiSyncPort || !DOM.isHeadless
+    !DOM.rememberPassword || !DOM.reconnectDelay || !DOM.websocketUrl || !DOM.uiSyncPort || !DOM.isHeadless
   ) {
     return null;
   }
@@ -199,6 +203,7 @@ export function getFormValues(): AppConfig | null {
       email: DOM.connectorEmail.value.trim(),
       password: DOM.connectorPassword.value,
     },
+    rememberPassword: DOM.rememberPassword.checked,
     reconnectDelaySeconds: Math.floor(Number(DOM.reconnectDelay.value)),
     isHeadless: DOM.isHeadless.checked,
     websocketUrl: DOM.websocketUrl.value.trim(),
