@@ -78,6 +78,9 @@ pub(super) async fn run_live_state_actor(
                             eprintln!("Live-state flush ack receiver dropped before notification.");
                         }
                     }
+                    TransientLaneMessage::Snapshot { result } => {
+                        let _ = result.send(master_state.clone());
+                    }
                 }
             }
         }
@@ -128,6 +131,7 @@ pub(super) async fn run_event_feed_actor(
                             eprintln!("Event-feed flush ack receiver dropped before notification.");
                         }
                     }
+                    TransientLaneMessage::Snapshot { .. } => {}
                 }
             }
         }
