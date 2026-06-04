@@ -818,79 +818,127 @@ impl RocketLeagueWorker {
         lanes: &RoutingLanes,
         routing_stats: &mut RoutingStats,
     ) {
+        let should_mirror = Self::is_high_value_historical_event(envelope.event_type.as_str());
+
         match envelope.class {
-            IngestClass::LiveState => {
-                let sequence = envelope.seq;
-                let event_type = envelope.event_type.clone();
-                match lanes
-                    .live_state
-                    .try_send(TransientLaneMessage::Event(envelope))
-                {
-                    Ok(()) => {}
-                    Err(TrySendError::Full(_)) => {
-                        routing_stats.live_state_drops =
-                            routing_stats.live_state_drops.saturating_add(1);
-                        warn!(
-                            "Live-state lane is full (backpressure). Dropping live-state payload to preserve ingestion flow (dropped_total={}, seq={}, event={}).",
-                            routing_stats.live_state_drops, sequence, event_type
-                        );
-                    }
-                    Err(TrySendError::Closed(_)) => {
-                        error!(
-                            "Live-state lane is closed. Dropping live-state payload (seq={}, event={}).",
-                            sequence, event_type
-                        );
-                    }
+            IngestClass::LiveState => Self::try_send_live_state(envelope, lanes, routing_stats),
+            IngestClass::EventFeed => {
+                let historical_copy = should_mirror.then(|| envelope.clone());
+                Self::try_send_event_feed(envelope, lanes, routing_stats);
+                if let Some(copy) = historical_copy {
+                    Self::try_send_historical(copy, lanes, routing_stats);
                 }
             }
-            IngestClass::EventFeed => match lanes
-                .event_feed
-                .try_send(TransientLaneMessage::Event(envelope))
-            {
-                Ok(()) => {}
-                Err(TrySendError::Full(message)) => match message {
-                    TransientLaneMessage::Event(dropped) => {
-                        routing_stats.event_feed_losses =
-                            routing_stats.event_feed_losses.saturating_add(1);
-                        warn!(
-                            "Event feed lane is full (backpressure). Dropping event feed payload to prevent ingestion stall (dropped_total={}, seq={}, event={}).",
-                            routing_stats.event_feed_losses, dropped.seq, dropped.event_type
-                        );
-                    }
-                    TransientLaneMessage::Flush { .. } => {
-                        warn!("Unexpected flush control message observed in event-feed fast path.");
-                    }
-                },
-                Err(TrySendError::Closed(message)) => match message {
-                    TransientLaneMessage::Event(dropped) => {
-                        error!(
-                            "Event feed lane is closed. Dropping event feed payload (seq={}, event={}).",
-                            dropped.seq, dropped.event_type
-                        );
-                    }
-                    TransientLaneMessage::Flush { .. } => {
-                        warn!("Unexpected flush control message observed in event-feed fast path.");
-                    }
-                },
-            },
-            IngestClass::Historical => match lanes.historical.try_send(envelope) {
-                Ok(()) => {}
-                Err(TrySendError::Full(dropped)) => {
-                    routing_stats.historical_overflows =
-                        routing_stats.historical_overflows.saturating_add(1);
+            IngestClass::Historical => {
+                let event_feed_copy = should_mirror.then(|| envelope.clone());
+                Self::try_send_historical(envelope, lanes, routing_stats);
+                if let Some(copy) = event_feed_copy {
+                    Self::try_send_event_feed(copy, lanes, routing_stats);
+                }
+            }
+        }
+    }
+
+    fn try_send_live_state(
+        envelope: IngestEnvelope,
+        lanes: &RoutingLanes,
+        routing_stats: &mut RoutingStats,
+    ) {
+        let sequence = envelope.seq;
+        let event_type = envelope.event_type.clone();
+
+        match lanes
+            .live_state
+            .try_send(TransientLaneMessage::Event(envelope))
+        {
+            Ok(()) => {}
+            Err(TrySendError::Full(_)) => {
+                routing_stats.live_state_drops = routing_stats.live_state_drops.saturating_add(1);
+                warn!(
+                    "Live-state lane is full (backpressure). Dropping live-state payload to preserve ingestion flow (dropped_total={}, seq={}, event={}).",
+                    routing_stats.live_state_drops, sequence, event_type
+                );
+            }
+            Err(TrySendError::Closed(_)) => {
+                error!(
+                    "Live-state lane is closed. Dropping live-state payload (seq={}, event={}).",
+                    sequence, event_type
+                );
+            }
+        }
+    }
+
+    fn try_send_event_feed(
+        envelope: IngestEnvelope,
+        lanes: &RoutingLanes,
+        routing_stats: &mut RoutingStats,
+    ) {
+        match lanes
+            .event_feed
+            .try_send(TransientLaneMessage::Event(envelope))
+        {
+            Ok(()) => {}
+            Err(TrySendError::Full(message)) => match message {
+                TransientLaneMessage::Event(dropped) => {
+                    routing_stats.event_feed_losses =
+                        routing_stats.event_feed_losses.saturating_add(1);
                     warn!(
-                        "Historical lane is full (backpressure). Dropping historical event to prevent ingestion stall! (dropped_total={}, seq={}, event={}).",
-                        routing_stats.historical_overflows, dropped.seq, dropped.event_type
+                        "Event feed lane is full (backpressure). Dropping event feed payload to prevent ingestion stall (dropped_total={}, seq={}, event={}).",
+                        routing_stats.event_feed_losses, dropped.seq, dropped.event_type
                     );
                 }
-                Err(TrySendError::Closed(dropped)) => {
+                TransientLaneMessage::Flush { .. } => {
+                    warn!("Unexpected flush control message observed in event-feed fast path.");
+                }
+            },
+            Err(TrySendError::Closed(message)) => match message {
+                TransientLaneMessage::Event(dropped) => {
                     error!(
-                        "Historical lane is closed. Dropping historical payload (seq={}, event={}).",
+                        "Event feed lane is closed. Dropping event feed payload (seq={}, event={}).",
                         dropped.seq, dropped.event_type
                     );
                 }
+                TransientLaneMessage::Flush { .. } => {
+                    warn!("Unexpected flush control message observed in event-feed fast path.");
+                }
             },
         }
+    }
+
+    fn try_send_historical(
+        envelope: IngestEnvelope,
+        lanes: &RoutingLanes,
+        routing_stats: &mut RoutingStats,
+    ) {
+        match lanes.historical.try_send(envelope) {
+            Ok(()) => {}
+            Err(TrySendError::Full(dropped)) => {
+                routing_stats.historical_overflows =
+                    routing_stats.historical_overflows.saturating_add(1);
+                warn!(
+                    "Historical lane is full (backpressure). Dropping historical event to prevent ingestion stall! (dropped_total={}, seq={}, event={}).",
+                    routing_stats.historical_overflows, dropped.seq, dropped.event_type
+                );
+            }
+            Err(TrySendError::Closed(dropped)) => {
+                error!(
+                    "Historical lane is closed. Dropping historical payload (seq={}, event={}).",
+                    dropped.seq, dropped.event_type
+                );
+            }
+        }
+    }
+
+    fn is_high_value_historical_event(event_type: &str) -> bool {
+        matches!(
+            event_type,
+            "GoalScored"
+                | "Goal"
+                | "StatfeedEvent"
+                | "MatchInitialized"
+                | "MatchEnded"
+                | "PodiumStart"
+        )
     }
 
     const fn classify_event(event: &RocketLeagueEvent) -> IngestClass {
@@ -1157,6 +1205,92 @@ mod tests {
         assert!(matches!(
             RocketLeagueWorker::classify_event(&RocketLeagueEvent::GoalReplayEnd),
             IngestClass::EventFeed
+        ));
+    }
+
+    #[test]
+    fn route_envelope_mirrors_statfeed_to_historical_lane() {
+        let (live_state_sender, _live_state_receiver) = mpsc::channel(1);
+        let (event_feed_sender, mut event_feed_receiver) = mpsc::channel(1);
+        let (historical_sender, mut historical_receiver) = mpsc::channel(1);
+        let lanes = RoutingLanes {
+            live_state: live_state_sender,
+            event_feed: event_feed_sender,
+            historical: historical_sender,
+        };
+
+        let mut routing_stats = RoutingStats::default();
+        let envelope = IngestEnvelope {
+            seq: 9,
+            event_type: "StatfeedEvent".to_string(),
+            payload: json!({"Event": "StatfeedEvent"}),
+            class: IngestClass::EventFeed,
+            active_match_id: "match_1".to_string(),
+        };
+
+        RocketLeagueWorker::route_envelope(envelope, &lanes, &mut routing_stats);
+
+        let feed_message = event_feed_receiver.try_recv();
+        assert!(matches!(
+            feed_message,
+            Ok(TransientLaneMessage::Event(IngestEnvelope {
+                event_type,
+                class: IngestClass::EventFeed,
+                ..
+            })) if event_type == "StatfeedEvent"
+        ));
+
+        let historical_message = historical_receiver.try_recv();
+        assert!(matches!(
+            historical_message,
+            Ok(IngestEnvelope {
+                event_type,
+                class: IngestClass::EventFeed,
+                ..
+            }) if event_type == "StatfeedEvent"
+        ));
+    }
+
+    #[test]
+    fn route_envelope_mirrors_goal_to_event_feed_lane() {
+        let (live_state_sender, _live_state_receiver) = mpsc::channel(1);
+        let (event_feed_sender, mut event_feed_receiver) = mpsc::channel(1);
+        let (historical_sender, mut historical_receiver) = mpsc::channel(1);
+        let lanes = RoutingLanes {
+            live_state: live_state_sender,
+            event_feed: event_feed_sender,
+            historical: historical_sender,
+        };
+
+        let mut routing_stats = RoutingStats::default();
+        let envelope = IngestEnvelope {
+            seq: 12,
+            event_type: "GoalScored".to_string(),
+            payload: json!({"Event": "GoalScored"}),
+            class: IngestClass::Historical,
+            active_match_id: "match_1".to_string(),
+        };
+
+        RocketLeagueWorker::route_envelope(envelope, &lanes, &mut routing_stats);
+
+        let historical_message = historical_receiver.try_recv();
+        assert!(matches!(
+            historical_message,
+            Ok(IngestEnvelope {
+                event_type,
+                class: IngestClass::Historical,
+                ..
+            }) if event_type == "GoalScored"
+        ));
+
+        let feed_message = event_feed_receiver.try_recv();
+        assert!(matches!(
+            feed_message,
+            Ok(TransientLaneMessage::Event(IngestEnvelope {
+                event_type,
+                class: IngestClass::Historical,
+                ..
+            })) if event_type == "GoalScored"
         ));
     }
 }
