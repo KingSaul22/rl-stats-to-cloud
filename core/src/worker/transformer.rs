@@ -837,6 +837,70 @@ mod tests {
     }
 
     #[test]
+    fn normalize_event_feed_preserves_statfeed_analytics_fields() {
+        let ctx = session_context();
+        let raw = json!({
+            "Event": "StatfeedEvent",
+            "EventName": "Save",
+            "MainTarget": {
+                "Name": "PlayerA"
+            },
+            "game_seconds_remaining": 92
+        });
+
+        let normalized = normalize_event_feed(&raw, "StatfeedEvent", &ctx);
+
+        assert_eq!(
+            normalized.get("type"),
+            Some(&Value::String("statfeedevent".to_string()))
+        );
+        assert_eq!(
+            normalized.get("stat_type"),
+            Some(&Value::String("Save".to_string()))
+        );
+        assert_eq!(
+            normalized.get("primary_player"),
+            Some(&Value::String("PlayerA".to_string()))
+        );
+        assert_eq!(
+            normalized.get("match_id"),
+            Some(&Value::String("match_cfg_1".to_string()))
+        );
+        assert_eq!(
+            normalized.get("session_id"),
+            Some(&Value::String("session_cfg_1".to_string()))
+        );
+    }
+
+    #[test]
+    fn normalize_event_feed_preserves_lifecycle_event_identity() {
+        let ctx = session_context();
+        let raw = json!({
+            "Event": "MatchEnded",
+            "game_seconds_remaining": 0
+        });
+
+        let normalized = normalize_event_feed(&raw, "MatchEnded", &ctx);
+
+        assert_eq!(
+            normalized.get("type"),
+            Some(&Value::String("matchended".to_string()))
+        );
+        assert_eq!(
+            normalized.get("game_seconds_remaining"),
+            Some(&Value::from(0_u64))
+        );
+        assert_eq!(
+            normalized.get("match_id"),
+            Some(&Value::String("match_cfg_1".to_string()))
+        );
+        assert_eq!(
+            normalized.get("session_id"),
+            Some(&Value::String("session_cfg_1".to_string()))
+        );
+    }
+
+    #[test]
     fn normalize_historical_extracts_scorer_and_team() {
         let ctx = session_context();
         let raw = json!({
