@@ -1,5 +1,6 @@
 use crate::config::ConnectorConfig;
 use crate::firebase::FirebaseConnector;
+use crate::firebase_auth::FirebaseAuth;
 use async_trait::async_trait;
 use serde_json::Value;
 use std::error::Error;
@@ -126,28 +127,25 @@ impl EventSink for NullSink {
 }
 
 #[must_use]
-pub async fn connector_factory(config: &ConnectorConfig) -> Arc<dyn EventSink + Send + Sync> {
+pub fn connector_factory(config: &ConnectorConfig) -> Arc<dyn EventSink + Send + Sync> {
+    let (sink, _auth) = connector_factory_with_auth(config);
+    sink
+}
+
+#[must_use]
+pub fn connector_factory_with_auth(
+    config: &ConnectorConfig,
+) -> (Arc<dyn EventSink + Send + Sync>, Option<FirebaseAuth>) {
     match config {
         ConnectorConfig::Firebase {
             url,
             api_key,
             email,
             password,
-        } => match FirebaseConnector::new(
-            url.clone(),
-            api_key.clone(),
-            email.clone(),
-            password.clone(),
-        )
-        .await
-        {
-            Ok(connector) => Arc::new(connector),
-            Err(err) => {
-                eprintln!(
-                    "Firebase connector warning: failed to initialize auth session ({err}). Falling back to null sink."
-                );
-                Arc::new(NullSink)
-            }
-        },
+        } => {
+            let auth = FirebaseAuth::new(api_key.clone(), email.clone(), password.clone());
+            let connector = FirebaseConnector::new(url.clone(), auth.clone());
+            (Arc::new(connector), Some(auth))
+        }
     }
 }
