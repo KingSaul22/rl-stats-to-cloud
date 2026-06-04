@@ -66,6 +66,9 @@ Run all checks before committing:
 # Rust type-check (workspace)
 cargo check --workspace
 
+# Guardrail: forbid blocking std socket APIs in async runtime paths
+bash scripts/check-no-sync-socket-async.sh
+
 # Strict clippy: all + pedantic = deny, nursery = warn
 cargo clippy --all-targets --all-features -- \
   -D warnings \
