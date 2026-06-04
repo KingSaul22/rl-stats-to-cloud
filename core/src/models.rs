@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize)]
 pub struct MatchIndexEntry {
@@ -19,4 +19,17 @@ pub struct PlayerMatchLog {
     pub touches: u64,
     pub demos: u64,
     pub match_id: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct CumulativePlayerStats {
+    pub goals: u64,
+    pub assists: u64,
+    pub saves: u64,
+    pub shots: u64,
+    pub wins: u64,
+    pub losses: u64,
+    pub mvps: u64,
+    pub score: i64,
 }
