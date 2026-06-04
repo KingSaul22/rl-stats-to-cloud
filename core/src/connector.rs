@@ -108,6 +108,18 @@ pub trait EventSink: Send + Sync {
             "sink does not support put_node for path '{path}'"
         )))
     }
+
+    /// Retrieves a JSON node from the backend sink.
+    /// Returns `Ok(None)` when the node does not exist (null response).
+    ///
+    /// # Errors
+    /// Returns an error when the request fails or the backend returns
+    /// a non-success status code.
+    async fn get_node(&self, path: &str) -> Result<Option<Value>, SinkError> {
+        Err(SinkError::terminal(format!(
+            "sink does not support get_node for path '{path}'"
+        )))
+    }
 }
 pub use EventSink as TelemetrySink;
 
@@ -138,6 +150,10 @@ impl EventSink for NullSink {
 
     async fn put_node(&self, _path: &str, _data: &Value) -> Result<(), SinkError> {
         Ok(())
+    }
+
+    async fn get_node(&self, _path: &str) -> Result<Option<Value>, SinkError> {
+        Ok(None)
     }
 }
 
