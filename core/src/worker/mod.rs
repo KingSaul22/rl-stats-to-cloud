@@ -685,7 +685,7 @@ impl RocketLeagueWorker {
                     let already_aggregated = last_aggregated_match_id.as_deref().unwrap_or("")
                         == previous_match_id.as_str();
 
-                    if has_players && !already_aggregated {
+                    if has_players && !already_aggregated && *cached_historical_active {
                         aggregation::upload_aggregation(
                             sink,
                             previous_match_id.as_str(),
