@@ -250,10 +250,6 @@ pub async fn upload_aggregation(
     join_all(upload_futures).await;
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "R-M-W flow spans GET, modify, and PUT with retries; splitting would add indirection without reducing overall complexity."
-)]
 async fn update_cumulative_stats(
     sink: Arc<dyn TelemetrySink + Send + Sync>,
     sanitized_id: String,

@@ -574,6 +574,10 @@ impl RocketLeagueWorker {
         clippy::too_many_arguments,
         reason = "Value handler requires routing/session/compaction shared mutable state."
     )]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "Value handler spans event classification, compaction trigger detection, flush, aggregation, and reset."
+    )]
     async fn handle_value(
         &self,
         mut parsed: Value,
