@@ -630,6 +630,8 @@ impl RocketLeagueWorker {
                     if has_players {
                         aggregation::upload_aggregation(sink, previous_match_id.as_str(), &state, shutdown).await;
                     }
+
+                    let _ = lanes.live_state.send(TransientLaneMessage::Reset).await;
                 }
 
                 if let Err(err) = Self::compact_transient_nodes(
@@ -996,6 +998,9 @@ impl RocketLeagueWorker {
                 TransientLaneMessage::Snapshot { .. } => {
                     warn!("Unexpected snapshot control message observed in event-feed fast path.");
                 }
+                TransientLaneMessage::Reset => {
+                    warn!("Unexpected reset control message observed in event-feed fast path.");
+                }
             },
             Err(TrySendError::Closed(message)) => match message {
                 TransientLaneMessage::Event(dropped) => {
@@ -1009,6 +1014,9 @@ impl RocketLeagueWorker {
                 }
                 TransientLaneMessage::Snapshot { .. } => {
                     warn!("Unexpected snapshot control message observed in event-feed fast path.");
+                }
+                TransientLaneMessage::Reset => {
+                    warn!("Unexpected reset control message observed in event-feed fast path.");
                 }
             },
         }
