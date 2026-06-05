@@ -649,11 +649,17 @@ impl RocketLeagueWorker {
                         .and_then(Value::as_str)
                         .map(ToString::to_string);
 
-                    let already_aggregated = snapshot_match_id.as_deref()
-                        == last_aggregated_match_id.as_deref();
+                    let already_aggregated =
+                        snapshot_match_id.as_deref() == last_aggregated_match_id.as_deref();
 
                     if has_players && !already_aggregated {
-                        aggregation::upload_aggregation(sink, previous_match_id.as_str(), &state, shutdown).await;
+                        aggregation::upload_aggregation(
+                            sink,
+                            previous_match_id.as_str(),
+                            &state,
+                            shutdown,
+                        )
+                        .await;
                         *last_aggregated_match_id = snapshot_match_id;
                     }
 
@@ -935,7 +941,9 @@ impl RocketLeagueWorker {
             }
             IngestClass::Historical => {
                 let is_lifecycle = Self::is_lifecycle_event(envelope.event_type.as_str());
-                let event_feed_copy = (!is_lifecycle).then(|| should_mirror.then(|| envelope.clone())).flatten();
+                let event_feed_copy = (!is_lifecycle)
+                    .then(|| should_mirror.then(|| envelope.clone()))
+                    .flatten();
                 let enriched =
                     Self::enrich_historical_timing(envelope, cached_game_seconds_remaining);
                 Self::try_send_historical(enriched, lanes, routing_stats);
@@ -1085,7 +1093,10 @@ impl RocketLeagueWorker {
     }
 
     fn is_lifecycle_event(event_type: &str) -> bool {
-        matches!(event_type, "MatchEnded" | "MatchDestroyed" | "MatchInitialized")
+        matches!(
+            event_type,
+            "MatchEnded" | "MatchDestroyed" | "MatchInitialized"
+        )
     }
 
     const fn classify_event(event: &RocketLeagueEvent) -> IngestClass {
