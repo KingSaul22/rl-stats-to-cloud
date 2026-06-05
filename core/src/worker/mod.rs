@@ -125,6 +125,7 @@ impl RocketLeagueWorker {
         let mut sequence = 0_u64;
         let mut last_compaction_seq = 0_u64;
         let mut cached_game_seconds_remaining = None;
+        let mut last_aggregated_match_id: Option<String> = None;
 
         loop {
             if shutdown.is_cancelled() {
@@ -144,6 +145,7 @@ impl RocketLeagueWorker {
                     &mut sequence,
                     &mut last_compaction_seq,
                     &mut cached_game_seconds_remaining,
+                    &mut last_aggregated_match_id,
                     &mut session_context,
                     &mut routing_stats,
                 ) => result,
@@ -208,6 +210,7 @@ impl RocketLeagueWorker {
         sequence: &mut u64,
         last_compaction_seq: &mut u64,
         cached_game_seconds_remaining: &mut Option<u64>,
+        last_aggregated_match_id: &mut Option<String>,
         session_context: &mut SessionContext,
         routing_stats: &mut RoutingStats,
     ) -> Result<(), String> {
@@ -220,6 +223,7 @@ impl RocketLeagueWorker {
                     sequence,
                     last_compaction_seq,
                     cached_game_seconds_remaining,
+                    last_aggregated_match_id,
                     session_context,
                     routing_stats,
                 )
@@ -234,6 +238,7 @@ impl RocketLeagueWorker {
                 sequence,
                 last_compaction_seq,
                 cached_game_seconds_remaining,
+                last_aggregated_match_id,
                 session_context,
                 routing_stats,
             )
@@ -252,6 +257,7 @@ impl RocketLeagueWorker {
                         sequence,
                         last_compaction_seq,
                         cached_game_seconds_remaining,
+                        last_aggregated_match_id,
                         session_context,
                         routing_stats,
                     )
@@ -275,6 +281,7 @@ impl RocketLeagueWorker {
         sequence: &mut u64,
         last_compaction_seq: &mut u64,
         cached_game_seconds_remaining: &mut Option<u64>,
+        last_aggregated_match_id: &mut Option<String>,
         session_context: &mut SessionContext,
         routing_stats: &mut RoutingStats,
     ) -> Result<(), String> {
@@ -312,6 +319,7 @@ impl RocketLeagueWorker {
                         sequence,
                         last_compaction_seq,
                         cached_game_seconds_remaining,
+                        last_aggregated_match_id,
                         session_context,
                         routing_stats,
                     )
@@ -327,6 +335,7 @@ impl RocketLeagueWorker {
                             sequence,
                             last_compaction_seq,
                             cached_game_seconds_remaining,
+                            last_aggregated_match_id,
                             session_context,
                             routing_stats,
                         )
@@ -363,6 +372,7 @@ impl RocketLeagueWorker {
         sequence: &mut u64,
         last_compaction_seq: &mut u64,
         cached_game_seconds_remaining: &mut Option<u64>,
+        last_aggregated_match_id: &mut Option<String>,
         session_context: &mut SessionContext,
         routing_stats: &mut RoutingStats,
     ) -> Result<(), String> {
@@ -405,6 +415,7 @@ impl RocketLeagueWorker {
                 sequence,
                 last_compaction_seq,
                 cached_game_seconds_remaining,
+                last_aggregated_match_id,
                 session_context,
                 routing_stats,
             )
@@ -470,6 +481,7 @@ impl RocketLeagueWorker {
         sequence: &mut u64,
         last_compaction_seq: &mut u64,
         cached_game_seconds_remaining: &mut Option<u64>,
+        last_aggregated_match_id: &mut Option<String>,
         session_context: &mut SessionContext,
         routing_stats: &mut RoutingStats,
     ) {
@@ -492,6 +504,7 @@ impl RocketLeagueWorker {
                         sequence,
                         last_compaction_seq,
                         cached_game_seconds_remaining,
+                        last_aggregated_match_id,
                         session_context,
                         routing_stats,
                     )
@@ -530,6 +543,7 @@ impl RocketLeagueWorker {
         sequence: &mut u64,
         last_compaction_seq: &mut u64,
         cached_game_seconds_remaining: &mut Option<u64>,
+        last_aggregated_match_id: &mut Option<String>,
         session_context: &mut SessionContext,
         routing_stats: &mut RoutingStats,
     ) {
@@ -549,6 +563,7 @@ impl RocketLeagueWorker {
             sequence,
             last_compaction_seq,
             cached_game_seconds_remaining,
+            last_aggregated_match_id,
             session_context,
             routing_stats,
         )
@@ -568,6 +583,7 @@ impl RocketLeagueWorker {
         sequence: &mut u64,
         last_compaction_seq: &mut u64,
         cached_game_seconds_remaining: &mut Option<u64>,
+        last_aggregated_match_id: &mut Option<String>,
         session_context: &mut SessionContext,
         routing_stats: &mut RoutingStats,
     ) {
@@ -627,8 +643,18 @@ impl RocketLeagueWorker {
                         .get("player_telemetry")
                         .and_then(Value::as_object)
                         .is_some_and(|obj| !obj.is_empty());
-                    if has_players {
+
+                    let snapshot_match_id = state
+                        .get("match_id")
+                        .and_then(Value::as_str)
+                        .map(ToString::to_string);
+
+                    let already_aggregated = snapshot_match_id.as_deref()
+                        == last_aggregated_match_id.as_deref();
+
+                    if has_players && !already_aggregated {
                         aggregation::upload_aggregation(sink, previous_match_id.as_str(), &state, shutdown).await;
+                        *last_aggregated_match_id = snapshot_match_id;
                     }
 
                     let _ = lanes.live_state.send(TransientLaneMessage::Reset).await;
