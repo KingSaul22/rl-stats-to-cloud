@@ -1,3 +1,4 @@
+use crate::bridge::request_poweroff;
 use crate::{SharedConfig, SharedConfigManager};
 use rl_stats_core::{AppConfig, AppState, StateReceiver};
 
@@ -54,4 +55,14 @@ pub async fn save_config(
 #[allow(clippy::needless_pass_by_value)]
 pub async fn get_status(state: tauri::State<'_, StateReceiver>) -> Result<AppState, String> {
     Ok(state.borrow().clone())
+}
+
+/// Request daemon shutdown through the control plane.
+///
+/// # Errors
+/// Returns an error if the daemon is not reachable or rejects the poweroff command.
+#[tauri::command]
+#[allow(clippy::needless_pass_by_value)]
+pub async fn shutdown_daemon() -> Result<(), String> {
+    request_poweroff().await
 }

@@ -15,11 +15,13 @@ const DOM: {
   saveStatus: HTMLElement | null;
   connectorType: HTMLSelectElement | null;
   connectorUrl: HTMLInputElement | null;
-  connectorAuthToken: HTMLInputElement | null;
+  connectorApiKey: HTMLInputElement | null;
+  connectorEmail: HTMLInputElement | null;
+  connectorPassword: HTMLInputElement | null;
   reconnectDelay: HTMLInputElement | null;
-  websocketUrl: HTMLInputElement | null; // NEW
-  uiSyncPort: HTMLInputElement | null;    // NEW
-  isHeadless: HTMLInputElement | null;    // NEW
+  websocketUrl: HTMLInputElement | null;
+  uiSyncPort: HTMLInputElement | null;
+  isHeadless: HTMLInputElement | null;
 } = {
   connectionStatus: null,
   lastEvent: null,
@@ -28,7 +30,9 @@ const DOM: {
   saveStatus: null,
   connectorType: null,
   connectorUrl: null,
-  connectorAuthToken: null,
+  connectorApiKey: null,
+  connectorEmail: null,
+  connectorPassword: null,
   reconnectDelay: null,
   websocketUrl: null,
   uiSyncPort: null,
@@ -46,10 +50,11 @@ export function initializeDOMCache(): void {
   DOM.saveStatus = document.querySelector<HTMLElement>(CONSTANTS.UI_SELECTORS.SAVE_STATUS);
   DOM.connectorType = document.querySelector<HTMLSelectElement>(CONSTANTS.UI_SELECTORS.CONNECTOR_TYPE);
   DOM.connectorUrl = document.querySelector<HTMLInputElement>(CONSTANTS.UI_SELECTORS.CONNECTOR_URL);
-  DOM.connectorAuthToken = document.querySelector<HTMLInputElement>(CONSTANTS.UI_SELECTORS.CONNECTOR_AUTH_TOKEN);
+  DOM.connectorApiKey = document.querySelector<HTMLInputElement>(CONSTANTS.UI_SELECTORS.CONNECTOR_API_KEY);
+  DOM.connectorEmail = document.querySelector<HTMLInputElement>(CONSTANTS.UI_SELECTORS.CONNECTOR_EMAIL);
+  DOM.connectorPassword = document.querySelector<HTMLInputElement>(CONSTANTS.UI_SELECTORS.CONNECTOR_PASSWORD);
   DOM.reconnectDelay = document.querySelector<HTMLInputElement>(CONSTANTS.UI_SELECTORS.RECONNECT_DELAY);
-  
-  // Directly bind the new IDs added to index.html
+
   DOM.websocketUrl = document.querySelector<HTMLInputElement>("#websocket-url");
   DOM.uiSyncPort = document.querySelector<HTMLInputElement>("#ui-sync-port");
   DOM.isHeadless = document.querySelector<HTMLInputElement>("#is-headless");
@@ -119,7 +124,8 @@ export function renderStatus(status: StatusPayload): void {
 
 export function renderConfigForm(config: AppConfig): void {
   if (
-    !DOM.connectorType || !DOM.connectorUrl || !DOM.connectorAuthToken || 
+    !DOM.connectorType || !DOM.connectorUrl || !DOM.connectorApiKey ||
+    !DOM.connectorEmail || !DOM.connectorPassword ||
     !DOM.reconnectDelay || !DOM.websocketUrl || !DOM.uiSyncPort || !DOM.isHeadless
   ) {
     return;
@@ -127,7 +133,9 @@ export function renderConfigForm(config: AppConfig): void {
 
   DOM.connectorType.value = config.connector.type || CONSTANTS.CONNECTOR_TYPES.FIREBASE;
   DOM.connectorUrl.value = config.connector.url;
-  DOM.connectorAuthToken.value = config.connector.authToken || "";
+  DOM.connectorApiKey.value = config.connector.apiKey;
+  DOM.connectorEmail.value = config.connector.email;
+  DOM.connectorPassword.value = config.connector.password;
   DOM.reconnectDelay.value = String(config.reconnectDelaySeconds);
   DOM.websocketUrl.value = config.websocketUrl;
   DOM.uiSyncPort.value = String(config.uiSyncPort);
@@ -176,7 +184,8 @@ export function startSaveMessageTimeout(): void {
  */
 export function getFormValues(): AppConfig | null {
   if (
-    !DOM.connectorType || !DOM.connectorUrl || !DOM.connectorAuthToken || 
+    !DOM.connectorType || !DOM.connectorUrl || !DOM.connectorApiKey ||
+    !DOM.connectorEmail || !DOM.connectorPassword ||
     !DOM.reconnectDelay || !DOM.websocketUrl || !DOM.uiSyncPort || !DOM.isHeadless
   ) {
     return null;
@@ -186,7 +195,9 @@ export function getFormValues(): AppConfig | null {
     connector: {
       type: DOM.connectorType.value,
       url: DOM.connectorUrl.value.trim(),
-      authToken: DOM.connectorAuthToken.value.trim() || null,
+      apiKey: DOM.connectorApiKey.value.trim(),
+      email: DOM.connectorEmail.value.trim(),
+      password: DOM.connectorPassword.value,
     },
     reconnectDelaySeconds: Math.floor(Number(DOM.reconnectDelay.value)),
     isHeadless: DOM.isHeadless.checked,

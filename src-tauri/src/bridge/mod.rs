@@ -20,6 +20,10 @@ pub type SharedConfigManager = Arc<ConfigManager>;
 pub type BridgeTaskHandle = JoinHandle<()>;
 pub type SharedBridgeTask = Arc<Mutex<Option<BridgeTaskHandle>>>;
 
+pub(crate) async fn request_poweroff() -> Result<(), String> {
+    transport::request_poweroff().await
+}
+
 #[tauri::command]
 fn greet(name: &str) -> String {
     format!("Hello, {name}! You've been greeted from Rust!")
@@ -51,7 +55,8 @@ pub fn run_tauri(config: AppConfig) -> Result<(), tauri::Error> {
             greet,
             commands::get_config,
             commands::save_config,
-            commands::get_status
+            commands::get_status,
+            commands::shutdown_daemon
         ])
         .setup(move |app| {
             let config_dir = app.path().app_config_dir()?;
