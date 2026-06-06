@@ -970,9 +970,7 @@ impl RocketLeagueWorker {
         let should_mirror = Self::is_high_value_historical_event(envelope.event_type.as_str());
 
         match envelope.class {
-            IngestClass::LiveState => {
-                Self::try_send_live_state(envelope, lanes, routing_stats)
-            }
+            IngestClass::LiveState => Self::try_send_live_state(envelope, lanes, routing_stats),
             IngestClass::EventFeed => {
                 let is_lifecycle = Self::is_lifecycle_event(envelope.event_type.as_str());
                 let is_match_initialized = envelope.event_type.as_str() == "MatchInitialized";
@@ -1050,11 +1048,9 @@ impl RocketLeagueWorker {
                 );
                 Ok(())
             }
-            Err(TrySendError::Closed(_)) => {
-                Err(format!(
-                    "Live-state lane is closed. Cannot send live-state payload (seq={sequence}, event={event_type})."
-                ))
-            }
+            Err(TrySendError::Closed(_)) => Err(format!(
+                "Live-state lane is closed. Cannot send live-state payload (seq={sequence}, event={event_type})."
+            )),
         }
     }
 
@@ -1102,12 +1098,10 @@ impl RocketLeagueWorker {
                 );
                 Ok(())
             }
-            Err(TrySendError::Closed(dropped)) => {
-                Err(format!(
-                    "Historical lane actor channel closed unexpectedly (seq={}, event={}).",
-                    dropped.seq, dropped.event_type
-                ))
-            }
+            Err(TrySendError::Closed(dropped)) => Err(format!(
+                "Historical lane actor channel closed unexpectedly (seq={}, event={}).",
+                dropped.seq, dropped.event_type
+            )),
         }
     }
 

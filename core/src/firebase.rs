@@ -98,6 +98,13 @@ impl FirebaseConnector {
         })?;
 
         let normalized_path = path.trim_matches('/');
+
+        if normalized_path.is_empty() {
+            return Err(SinkError::terminal(
+                "firebase delete_node requires a non-empty path to prevent root database deletion",
+            ));
+        }
+
         let url = self.build_json_url(normalized_path, &auth_token);
         let redacted_url = Self::redact_url(&url);
 
