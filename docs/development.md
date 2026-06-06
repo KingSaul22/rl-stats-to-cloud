@@ -152,6 +152,24 @@ type-complexity-threshold = 50
 
 ### Rustfmt
 
+All Rust code must be formatted with `rustfmt` before commit. The workspace root
+`rustfmt.toml` applies to both crates.
+
+**Format the entire workspace:**
+
+```bash
+cargo fmt --all
+```
+
+**Check-only (CI and pre-commit hooks):**
+
+```bash
+cargo fmt --all -- --check
+```
+
+The `--check` flag emits a diff of unformatted code and exits with a non-zero status
+if any file requires reformatting, without modifying files on disk.
+
 **`src-tauri/rustfmt.toml`:**
 
 ```toml
@@ -160,6 +178,44 @@ fn_call_width = 60
 format_strings = true
 reorder_imports = true
 ```
+
+## Git Hooks Configuration
+
+The repository includes a pre-commit hook at `.githooks/pre-commit` that enforces
+TypeScript type-checking, Rust formatting, and Clippy linting before each commit:
+
+```bash
+bun run tsc
+cargo fmt --all -- --check
+cargo clippy --all-targets --all-features -- -D warnings -D clippy::all -D clippy::pedantic -D clippy::nursery
+```
+
+### Activation
+
+Git ignores custom hook directories by default — a fresh clone will not execute the
+hooks, and GUI clients (including GitHub Desktop) will bypass them unless explicitly
+configured. Every developer must run the following commands **after cloning** the
+repository:
+
+```bash
+git config core.hooksPath .githooks
+chmod +x .githooks/pre-commit
+```
+
+The `core.hooksPath` setting directs Git to use `.githooks/` instead of the default
+`.git/hooks/`. The `chmod` ensures the script is executable (required on macOS and Linux).
+
+### Bypassing Hooks
+
+To commit without running the pre-commit hook (e.g., for a work-in-progress commit
+that will be amended later):
+
+```bash
+git commit --no-verify -m "WIP: ..."
+```
+
+Use `--no-verify` sparingly — CI will still reject unformatted code or Clippy violations
+on the pull request.
 
 ## Tauri Configuration
 
