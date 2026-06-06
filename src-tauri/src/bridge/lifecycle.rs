@@ -40,11 +40,7 @@ pub(super) fn shutdown_ui_bridge_and_disallow(
     {
         let abort_handle = handle.inner().abort_handle();
         let join_result = tauri::async_runtime::block_on(async {
-            tokio::time::timeout(
-                tokio::time::Duration::from_secs(2),
-                handle,
-            )
-            .await
+            tokio::time::timeout(tokio::time::Duration::from_secs(2), handle).await
         });
 
         match join_result {
