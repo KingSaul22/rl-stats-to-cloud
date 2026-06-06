@@ -674,7 +674,7 @@ impl RocketLeagueWorker {
             session_context.active_match_id.as_str(),
         ) {
             if *last_compaction_seq < *sequence {
-                Self::flush_transient_lanes(lanes, shutdown, *sequence, reason).await;
+                Self::flush_transient_lanes(lanes, shutdown, *sequence, reason).await?;
 
                 let snapshot = Self::request_live_state_snapshot(&lanes.live_state, shutdown).await;
                 if let Some(state) = snapshot {
@@ -836,7 +836,7 @@ impl RocketLeagueWorker {
         shutdown: &CancellationToken,
         seq: u64,
         reason: CompactionReason,
-    ) {
+    ) -> Result<(), String> {
         let (live_ack_sender, live_ack_receiver) = oneshot::channel();
         let live_flush_sent = Self::send_flush_request(
             "live_state",
@@ -859,13 +859,22 @@ impl RocketLeagueWorker {
         )
         .await;
 
-        if live_flush_sent {
-            Self::wait_for_flush_ack("live_state", live_ack_receiver, shutdown, seq, reason).await;
+        if !live_flush_sent {
+            return Err(format!(
+                "Compaction aborted: live_state flush barrier failed at seq={seq} reason={reason:?}"
+            ));
         }
 
-        if event_flush_sent {
-            Self::wait_for_flush_ack("event_feed", event_ack_receiver, shutdown, seq, reason).await;
+        if !event_flush_sent {
+            return Err(format!(
+                "Compaction aborted: event_feed flush barrier failed at seq={seq} reason={reason:?}"
+            ));
         }
+
+        Self::wait_for_flush_ack("live_state", live_ack_receiver, shutdown, seq, reason).await;
+        Self::wait_for_flush_ack("event_feed", event_ack_receiver, shutdown, seq, reason).await;
+
+        Ok(())
     }
 
     async fn send_flush_request(
