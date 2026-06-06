@@ -47,6 +47,9 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
+      - name: Check async socket API usage
+        run: bash scripts/check-no-sync-socket-async.sh
+
       - name: Run clippy
         run: cargo clippy --all-targets --all-features -- -D warnings -D clippy::all -D clippy::pedantic -D clippy::nursery
 

@@ -7,12 +7,14 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncReadExt;
 use tokio::net::TcpStream;
+use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 use tokio::time::sleep;
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_util::sync::CancellationToken;
+use tracing::{error, warn};
 use url::Url;
 
 mod actors;
@@ -43,6 +45,7 @@ struct RoutingLanes {
 #[derive(Default)]
 struct RoutingStats {
     dropped_event_feed_count: u64,
+    dropped_historical_count: u64,
 }
 
 #[derive(Clone)]
@@ -252,8 +255,7 @@ impl RocketLeagueWorker {
                         sequence,
                         session_context,
                         routing_stats,
-                    )
-                    .await?;
+                    );
                 }
                 Message::Binary(bytes) => match String::from_utf8(bytes.clone()) {
                     Ok(text) => {
@@ -264,8 +266,7 @@ impl RocketLeagueWorker {
                             sequence,
                             session_context,
                             routing_stats,
-                        )
-                        .await?;
+                        );
                     }
                     Err(err) => eprintln!("Skipping non-UTF8 binary frame: {err}"),
                 },
@@ -332,8 +333,7 @@ impl RocketLeagueWorker {
                 sequence,
                 session_context,
                 routing_stats,
-            )
-            .await?;
+            );
 
             if pending.len() > 512 * 1024 {
                 eprintln!("Dropping oversized undecodable TCP buffer.");
@@ -382,7 +382,7 @@ impl RocketLeagueWorker {
         Ok((host, port))
     }
 
-    async fn consume_json_stream(
+    fn consume_json_stream(
         &self,
         pending: &mut String,
         shutdown: &CancellationToken,
@@ -390,7 +390,7 @@ impl RocketLeagueWorker {
         sequence: &mut u64,
         session_context: &mut SessionContext,
         routing_stats: &mut RoutingStats,
-    ) -> Result<(), String> {
+    ) {
         loop {
             let mut stream = serde_json::Deserializer::from_str(pending).into_iter::<Value>();
             let item = stream.next();
@@ -409,8 +409,7 @@ impl RocketLeagueWorker {
                         sequence,
                         session_context,
                         routing_stats,
-                    )
-                    .await?;
+                    );
                     pending.drain(..consumed);
                 }
                 Some(Err(err)) => {
@@ -430,10 +429,9 @@ impl RocketLeagueWorker {
                 None => break,
             }
         }
-        Ok(())
     }
 
-    async fn handle_payload(
+    fn handle_payload(
         &self,
         payload: &str,
         shutdown: &CancellationToken,
@@ -441,12 +439,12 @@ impl RocketLeagueWorker {
         sequence: &mut u64,
         session_context: &mut SessionContext,
         routing_stats: &mut RoutingStats,
-    ) -> Result<(), String> {
+    ) {
         let parsed: Value = match serde_json::from_str(payload) {
             Ok(value) => value,
             Err(err) => {
                 eprintln!("Skipping invalid JSON payload: {err}");
-                return Ok(());
+                return;
             }
         };
 
@@ -457,24 +455,23 @@ impl RocketLeagueWorker {
             sequence,
             session_context,
             routing_stats,
-        )
-        .await
+        );
     }
 
-    async fn handle_value(
+    fn handle_value(
         &self,
         mut parsed: Value,
-        shutdown: &CancellationToken,
+        _shutdown: &CancellationToken,
         lanes: &RoutingLanes,
         sequence: &mut u64,
         session_context: &mut SessionContext,
         routing_stats: &mut RoutingStats,
-    ) -> Result<(), String> {
+    ) {
         Self::unwrap_double_encoded_data(&mut parsed);
 
         let Some(event_name) = parsed.get("Event").and_then(Value::as_str) else {
             println!("Received JSON without Event field.");
-            return Ok(());
+            return;
         };
         let parsed_event = match serde_json::from_value::<RocketLeagueEvent>(Value::String(
             event_name.to_string(),
@@ -488,7 +485,7 @@ impl RocketLeagueWorker {
 
         if event_name.is_empty() {
             println!("Received JSON with empty Event field.");
-            return Ok(());
+            return;
         }
 
         match parsed_event {
@@ -511,7 +508,7 @@ impl RocketLeagueWorker {
                 "Skipping historical event '{}' (seq={}) due to active replay.",
                 event_name, *sequence
             );
-            return Ok(());
+            return;
         }
 
         let payload = normalize_payload(class, &parsed, event_name, session_context);
@@ -523,52 +520,52 @@ impl RocketLeagueWorker {
             active_match_id: session_context.active_match_id.clone(),
         };
 
-        self.route_envelope(envelope, shutdown, lanes, routing_stats)
-            .await
+        Self::route_envelope(envelope, lanes, routing_stats);
     }
 
-    async fn route_envelope(
-        &self,
+    fn route_envelope(
         envelope: IngestEnvelope,
-        shutdown: &CancellationToken,
         lanes: &RoutingLanes,
         routing_stats: &mut RoutingStats,
-    ) -> Result<(), String> {
+    ) {
         match envelope.class {
             IngestClass::LiveState => {
                 let _ = lanes.live_state.send_replace(envelope);
-                Ok(())
             }
             IngestClass::EventFeed => match lanes.event_feed.try_send(envelope) {
-                Ok(()) => Ok(()),
-                Err(mpsc::error::TrySendError::Full(dropped)) => {
+                Ok(()) => {}
+                Err(TrySendError::Full(dropped)) => {
                     routing_stats.dropped_event_feed_count =
                         routing_stats.dropped_event_feed_count.saturating_add(1);
-                    eprintln!(
-                        "Dropping event_feed payload due to saturation (dropped_total={}, seq={}, event={}).",
+                    warn!(
+                        "Event feed lane is full (backpressure). Dropping event feed payload to prevent ingestion stall (dropped_total={}, seq={}, event={}).",
                         routing_stats.dropped_event_feed_count, dropped.seq, dropped.event_type
                     );
-                    Ok(())
                 }
-                Err(mpsc::error::TrySendError::Closed(dropped)) => Err(format!(
-                    "event_feed actor stopped before routing seq={} event={}.",
-                    dropped.seq, dropped.event_type
-                )),
+                Err(TrySendError::Closed(dropped)) => {
+                    error!(
+                        "Event feed lane is closed. Dropping event feed payload (seq={}, event={}).",
+                        dropped.seq, dropped.event_type
+                    );
+                }
             },
-            IngestClass::Historical => {
-                tokio::select! {
-                    () = shutdown.cancelled() => {
-                        Err("Shutdown requested before historical payload routing completed.".to_string())
-                    }
-                    send_result = lanes.historical.send(envelope) => {
-                        send_result.map_err(|err| format!(
-                            "historical actor stopped before routing seq={} event={}.",
-                            err.0.seq,
-                            err.0.event_type
-                        ))
-                    }
+            IngestClass::Historical => match lanes.historical.try_send(envelope) {
+                Ok(()) => {}
+                Err(TrySendError::Full(dropped)) => {
+                    routing_stats.dropped_historical_count =
+                        routing_stats.dropped_historical_count.saturating_add(1);
+                    warn!(
+                        "Historical lane is full (backpressure). Dropping historical event to prevent ingestion stall! (dropped_total={}, seq={}, event={}).",
+                        routing_stats.dropped_historical_count, dropped.seq, dropped.event_type
+                    );
                 }
-            }
+                Err(TrySendError::Closed(dropped)) => {
+                    error!(
+                        "Historical lane is closed. Dropping historical payload (seq={}, event={}).",
+                        dropped.seq, dropped.event_type
+                    );
+                }
+            },
         }
     }
 

@@ -8,6 +8,8 @@ pub fn execute_control_command(command: ControlCommand) {
     print_control_reply(command, &reply);
 }
 
+// This client is intentionally synchronous because it is used by the CLI path in
+// core/src/main.rs, not by Tokio async runtime tasks.
 pub(super) fn send_control_command(command: ControlCommand) -> ControlReply {
     let endpoint_display = control_endpoint_display();
     let mut stream = match StdTcpStream::connect(CONTROL_BIND_ADDR) {
