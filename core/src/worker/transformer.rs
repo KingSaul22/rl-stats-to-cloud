@@ -424,6 +424,9 @@ pub fn collect_player_telemetry(raw: &Value, players: &mut Map<String, Value>) {
         if let Some(touches) = extract_u64_from_keys(raw, &["Touches", "touches"]) {
             telemetry.insert("touches".to_string(), Value::from(touches));
         }
+        if let Some(team) = extract_u64_from_keys(raw, &["TeamNum", "team_num", "teamNum"]) {
+            telemetry.insert("team".to_string(), Value::from(team));
+        }
 
         if !telemetry.is_empty() {
             players.insert(final_player_id, Value::Object(telemetry));
@@ -731,6 +734,8 @@ mod tests {
         assert_eq!(players["Epic|456|0"]["saves"], json!(1));
         assert_eq!(players["Epic|456|0"]["demos"], json!(2));
         assert_eq!(players["Epic|456|0"]["touches"], json!(7));
+
+        assert!(players["Steam|123|0"].get("team").is_none());
     }
 
     #[test]
@@ -946,5 +951,36 @@ mod tests {
 
         assert_eq!(details_map.get("goal_speed"), Some(&Value::from(87_u64)));
         assert_eq!(details_map.get("goal_time"), Some(&Value::from(128_u64)));
+    }
+
+    #[test]
+    fn player_telemetry_extracts_team_from_raw_player_data() {
+        let raw = json!({
+            "Event": "UpdateState",
+            "Data": {
+                "Players": [
+                    {
+                        "Name": "PlayerBlue",
+                        "PrimaryId": "Steam|123|0",
+                        "TeamNum": 0,
+                        "Boost": 50
+                    },
+                    {
+                        "Name": "PlayerOrange",
+                        "PrimaryId": "Epic|456|0",
+                        "TeamNum": 1,
+                        "Boost": 60
+                    }
+                ]
+            }
+        });
+
+        let telemetry = extract_player_telemetry(&raw);
+        let Some(players) = telemetry.as_object() else {
+            return;
+        };
+
+        assert_eq!(players["Steam|123|0"]["team"], json!(0));
+        assert_eq!(players["Epic|456|0"]["team"], json!(1));
     }
 }

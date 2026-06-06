@@ -1,7 +1,7 @@
 use super::events::{IngestEnvelope, TransientLaneMessage};
 use super::{EVENT_FEED_MAX_FAILURES, RETRY_BACKOFF_BASE_SECONDS, RETRY_BACKOFF_MAX_SECONDS};
 use crate::connector::{SinkError, SinkLane, TelemetrySink};
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::mpsc;
@@ -81,6 +81,13 @@ pub(super) async fn run_live_state_actor(
                     TransientLaneMessage::Snapshot { result } => {
                         let _ = result.send(master_state.clone());
                     }
+                    TransientLaneMessage::Reset => {
+                        master_state["score"] = json!({ "blue": 0, "orange": 0 });
+                        master_state["player_telemetry"] = json!({});
+                        master_state["has_winner"] = json!(false);
+                        master_state["winner"] = json!("");
+                        master_state["is_overtime"] = json!(false);
+                    }
                 }
             }
         }
@@ -131,7 +138,7 @@ pub(super) async fn run_event_feed_actor(
                             eprintln!("Event-feed flush ack receiver dropped before notification.");
                         }
                     }
-                    TransientLaneMessage::Snapshot { .. } => {}
+                    TransientLaneMessage::Snapshot { .. } | TransientLaneMessage::Reset => {}
                 }
             }
         }

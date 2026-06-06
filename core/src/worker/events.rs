@@ -88,6 +88,7 @@ pub enum TransientLaneMessage {
     Event(IngestEnvelope),
     Flush { ack: oneshot::Sender<()> },
     Snapshot { result: oneshot::Sender<Value> },
+    Reset,
 }
 
 #[cfg(test)]
