@@ -6,6 +6,16 @@ pub struct MatchIndexEntry {
     pub blue_score: u64,
     pub orange_score: u64,
     pub match_id: String,
+    pub blue_team_id: Option<String>,
+    pub blue_shots: u64,
+    pub blue_saves: u64,
+    pub blue_assists: u64,
+    pub blue_demos: u64,
+    pub orange_team_id: Option<String>,
+    pub orange_shots: u64,
+    pub orange_saves: u64,
+    pub orange_assists: u64,
+    pub orange_demos: u64,
 }
 
 #[derive(Debug, Serialize)]

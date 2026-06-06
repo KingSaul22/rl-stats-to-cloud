@@ -38,6 +38,16 @@ pub fn build_match_index_entry(match_id: &str, state: &Value) -> MatchIndexEntry
         blue_score,
         orange_score,
         match_id: match_id.to_string(),
+        blue_team_id: None,
+        blue_shots: 0,
+        blue_saves: 0,
+        blue_assists: 0,
+        blue_demos: 0,
+        orange_team_id: None,
+        orange_shots: 0,
+        orange_saves: 0,
+        orange_assists: 0,
+        orange_demos: 0,
     }
 }
 
@@ -78,6 +88,20 @@ fn extract_u64(value: &Value, key: &str) -> u64 {
 
 fn extract_i64(value: &Value, key: &str) -> i64 {
     value.get(key).and_then(Value::as_i64).unwrap_or(0)
+}
+
+fn sum_team_stats(players: &[&Value]) -> (u64, u64, u64, u64) {
+    let mut shots = 0_u64;
+    let mut saves = 0_u64;
+    let mut assists = 0_u64;
+    let mut demos = 0_u64;
+    for p in players {
+        shots = shots.saturating_add(extract_u64(p, "shots"));
+        saves = saves.saturating_add(extract_u64(p, "saves"));
+        assists = assists.saturating_add(extract_u64(p, "assists"));
+        demos = demos.saturating_add(extract_u64(p, "demos"));
+    }
+    (shots, saves, assists, demos)
 }
 
 fn extract_team(player_data: &Value) -> Option<u64> {
@@ -121,7 +145,7 @@ pub async fn upload_aggregation(
     state: &Value,
     shutdown: &CancellationToken,
 ) {
-    let index_entry = build_match_index_entry(match_id, state);
+    let mut index_entry = build_match_index_entry(match_id, state);
     let player_logs = build_player_match_logs(match_id, state);
     let (winning_team, winning_team_max_score) = compute_match_outcome(state, &index_entry);
 
@@ -132,25 +156,6 @@ pub async fn upload_aggregation(
 
     let mut upload_futures: Vec<std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>> =
         Vec::new();
-
-    let index_value = match serde_json::to_value(&index_entry) {
-        Ok(value) => value,
-        Err(err) => {
-            error!(
-                "Aggregation error: failed to serialize match index entry for match_id={match_id}: {err}"
-            );
-            Value::Null
-        }
-    };
-
-    if !index_value.is_null() {
-        upload_futures.push(Box::pin(upload_with_retry(
-            Arc::clone(sink),
-            format!("matches_index/{match_id}"),
-            index_value,
-            shutdown.clone(),
-        )));
-    }
 
     for (sanitized_id, log) in &player_logs {
         let log_value = match serde_json::to_value(log) {
@@ -222,12 +227,54 @@ pub async fn upload_aggregation(
     )
     .await;
 
+    let (blue_shots, blue_saves, blue_assists, blue_demos) = sum_team_stats(&blue_players);
+    let (orange_shots, orange_saves, orange_assists, orange_demos) =
+        sum_team_stats(&orange_players);
+
+    if !blue_ids.is_empty() {
+        index_entry.blue_team_id = Some(blue_team_id.clone());
+    }
+    index_entry.blue_shots = blue_shots;
+    index_entry.blue_saves = blue_saves;
+    index_entry.blue_assists = blue_assists;
+    index_entry.blue_demos = blue_demos;
+
+    if !orange_ids.is_empty() {
+        index_entry.orange_team_id = Some(orange_team_id.clone());
+    }
+    index_entry.orange_shots = orange_shots;
+    index_entry.orange_saves = orange_saves;
+    index_entry.orange_assists = orange_assists;
+    index_entry.orange_demos = orange_demos;
+
+    let index_value = match serde_json::to_value(&index_entry) {
+        Ok(value) => value,
+        Err(err) => {
+            error!(
+                "Aggregation error: failed to serialize match index entry for match_id={match_id}: {err}"
+            );
+            Value::Null
+        }
+    };
+
+    if !index_value.is_null() {
+        upload_futures.push(Box::pin(upload_with_retry(
+            Arc::clone(sink),
+            format!("matches_index/{match_id}"),
+            index_value,
+            shutdown.clone(),
+        )));
+    }
+
     let blue_won = winning_team == Some(0);
     if !blue_ids.is_empty() {
         upload_futures.push(Box::pin(update_cumulative_team_stats(
             Arc::clone(sink),
             blue_team_id,
-            &blue_players,
+            blue_shots,
+            blue_saves,
+            blue_assists,
+            blue_demos,
             index_entry.blue_score,
             index_entry.orange_score,
             blue_won,
@@ -239,7 +286,10 @@ pub async fn upload_aggregation(
         upload_futures.push(Box::pin(update_cumulative_team_stats(
             Arc::clone(sink),
             orange_team_id,
-            &orange_players,
+            orange_shots,
+            orange_saves,
+            orange_assists,
+            orange_demos,
             index_entry.orange_score,
             index_entry.blue_score,
             !blue_won,
@@ -420,30 +470,21 @@ async fn resolve_team_id(
 }
 
 #[expect(
-    clippy::too_many_lines,
-    reason = "Team R-M-W flow spans GET, stats summation, modify, and PUT with retries."
+    clippy::too_many_arguments,
+    reason = "Team stats R-M-W requires pre-computed sums, match scores, win flag, and shutdown token."
 )]
 async fn update_cumulative_team_stats(
     sink: Arc<dyn TelemetrySink + Send + Sync>,
     team_id: String,
-    team_player_data: &[&Value],
+    shots_total: u64,
+    saves_total: u64,
+    assists_total: u64,
+    demos_total: u64,
     goals_for: u64,
     goals_against: u64,
     won: bool,
     shutdown: CancellationToken,
 ) {
-    let mut shots_total = 0_u64;
-    let mut saves_total = 0_u64;
-    let mut assists_total = 0_u64;
-    let mut demos_total = 0_u64;
-
-    for player_data in team_player_data {
-        shots_total = shots_total.saturating_add(extract_u64(player_data, "shots"));
-        saves_total = saves_total.saturating_add(extract_u64(player_data, "saves"));
-        assists_total = assists_total.saturating_add(extract_u64(player_data, "assists"));
-        demos_total = demos_total.saturating_add(extract_u64(player_data, "demos"));
-    }
-
     let path = format!("stats_cumulative_teams/{team_id}");
     let mut failures = 0_u32;
 
@@ -742,6 +783,16 @@ mod tests {
             blue_score: 3,
             orange_score: 2,
             match_id: "match_1".to_string(),
+            blue_team_id: None,
+            blue_shots: 0,
+            blue_saves: 0,
+            blue_assists: 0,
+            blue_demos: 0,
+            orange_team_id: None,
+            orange_shots: 0,
+            orange_saves: 0,
+            orange_assists: 0,
+            orange_demos: 0,
         };
         let (team, max_score) = compute_match_outcome(&state, &index);
         assert_eq!(team, Some(0));
@@ -762,6 +813,16 @@ mod tests {
             blue_score: 1,
             orange_score: 4,
             match_id: "match_1".to_string(),
+            blue_team_id: None,
+            blue_shots: 0,
+            blue_saves: 0,
+            blue_assists: 0,
+            blue_demos: 0,
+            orange_team_id: None,
+            orange_shots: 0,
+            orange_saves: 0,
+            orange_assists: 0,
+            orange_demos: 0,
         };
         let (team, max_score) = compute_match_outcome(&state, &index);
         assert_eq!(team, Some(1));
@@ -780,6 +841,16 @@ mod tests {
             blue_score: 2,
             orange_score: 2,
             match_id: "match_1".to_string(),
+            blue_team_id: None,
+            blue_shots: 0,
+            blue_saves: 0,
+            blue_assists: 0,
+            blue_demos: 0,
+            orange_team_id: None,
+            orange_shots: 0,
+            orange_saves: 0,
+            orange_assists: 0,
+            orange_demos: 0,
         };
         let (team, max_score) = compute_match_outcome(&state, &index);
         assert_eq!(team, None);
@@ -796,6 +867,16 @@ mod tests {
             blue_score: 0,
             orange_score: 0,
             match_id: "match_1".to_string(),
+            blue_team_id: None,
+            blue_shots: 0,
+            blue_saves: 0,
+            blue_assists: 0,
+            blue_demos: 0,
+            orange_team_id: None,
+            orange_shots: 0,
+            orange_saves: 0,
+            orange_assists: 0,
+            orange_demos: 0,
         };
         let (team, max_score) = compute_match_outcome(&state, &index);
         assert_eq!(team, None);
@@ -857,5 +938,32 @@ mod tests {
         assert_eq!(stats.goals_for, 12);
         assert_eq!(stats.matches_played, 0);
         assert_eq!(stats.losses, 0);
+    }
+
+    #[test]
+    fn match_index_entry_includes_team_ids_and_stats() {
+        let entry = MatchIndexEntry {
+            timestamp: 0,
+            blue_score: 3,
+            orange_score: 2,
+            match_id: "m1".to_string(),
+            blue_team_id: Some("eclipse_total".to_string()),
+            blue_shots: 8,
+            blue_saves: 2,
+            blue_assists: 3,
+            blue_demos: 1,
+            orange_team_id: None,
+            orange_shots: 4,
+            orange_saves: 0,
+            orange_assists: 1,
+            orange_demos: 0,
+        };
+        let v = serde_json::to_value(&entry).unwrap_or_default();
+        assert_eq!(v["blue_team_id"], json!("eclipse_total"));
+        assert_eq!(v["orange_team_id"], json!(null));
+        assert_eq!(v["blue_shots"], json!(8));
+        assert_eq!(v["blue_saves"], json!(2));
+        assert_eq!(v["blue_assists"], json!(3));
+        assert_eq!(v["blue_demos"], json!(1));
     }
 }
