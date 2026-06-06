@@ -38,9 +38,27 @@ pub(super) fn shutdown_ui_bridge_and_disallow(
     if let Ok(mut guard) = bridge_task.lock()
         && let Some(handle) = guard.take()
     {
-        tauri::async_runtime::block_on(async {
-            let _ = handle.await;
+        let abort_handle = handle.inner().abort_handle();
+        let join_result = tauri::async_runtime::block_on(async {
+            tokio::time::timeout(
+                tokio::time::Duration::from_secs(2),
+                handle,
+            )
+            .await
         });
+
+        match join_result {
+            Ok(Ok(())) => {}
+            Ok(Err(err)) => {
+                eprintln!("Bridge task join error on UI {phase}: {err}");
+            }
+            Err(_) => {
+                abort_handle.abort();
+                eprintln!(
+                    "WARNING: Bridge task did not shut down within 2s on UI {phase}. Forcibly aborted."
+                );
+            }
+        }
     }
 
     let disallow_reply = tauri::async_runtime::block_on(async {
