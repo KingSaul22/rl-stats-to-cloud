@@ -10,7 +10,7 @@
 | **Date** | 2026-05-31 |
 
 ## Context
-Telemetry ingress is exposed to upstream instability, including malformed JSON frames, partial payloads, and unknown event names introduced by plugin or game-version drift. In a continuous ingestion system, strict fail-stop behavior transforms isolated data-quality defects into full service outages, violating availability requirements and interrupting all lanes regardless of data criticality. A robust ingestion architecture must therefore contain bad inputs while preserving forward progress for valid telemetry.
+Telemetry ingress is exposed to upstream instability, including malformed JSON frames, partial payloads, and unknown event names introduced by game-version drift or upstream telemetry changes. In a continuous ingestion system, strict fail-stop behavior transforms isolated data-quality defects into full service outages, violating availability requirements and interrupting all lanes regardless of data criticality. A robust ingestion architecture must therefore contain bad inputs while preserving forward progress for valid telemetry.
 
 ## Decision
 The ingestion engine is fail-soft: malformed frames are rejected without terminating the daemon, and unrecognized events are quarantined to low-risk handling paths or safely dropped according to lane policy.

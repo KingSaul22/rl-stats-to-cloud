@@ -10,7 +10,7 @@
 | **Date** | 2026-05-31 |
 
 ## Context
-Certain telemetry frames may arrive without explicit match_id or session_id due to transient plugin context loss, startup race conditions, or upstream schema gaps. Without identity fields, downstream routing and storage cannot reliably associate events with analytical partitions. However, discarding structurally valid telemetry solely because context keys are absent reduces dataset completeness and weakens longitudinal statistics.
+Certain telemetry frames may arrive without explicit match_id or session_id due to transient session context loss, startup race conditions, or upstream schema gaps. Without identity fields, downstream routing and storage cannot reliably associate events with analytical partitions. However, discarding structurally valid telemetry solely because context keys are absent reduces dataset completeness and weakens longitudinal statistics.
 
 ## Decision
 When match_id or session_id is missing, the system deterministically generates fallback identifiers using local machine timestamp-derived values, preserving event admissibility and pipeline continuity.
