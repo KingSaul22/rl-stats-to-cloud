@@ -10,15 +10,15 @@
 | **Date** | 2026-05-31 |
 
 ## Context
-The telemetry source executes inside Rocket League through a BakkesMod C++ plugin, which operates in a latency-sensitive runtime where frame pacing and render-thread stability are strict non-functional requirements. External cloud communication introduces non-deterministic delays due to network jitter, transient packet loss, DNS resolution, TLS handshakes, and remote service throttling. If those operations occur in-process with the game plugin, network tail latency can propagate into gameplay performance degradation (e.g., frame-time spikes and FPS instability).  
+The telemetry source is the Rocket League Native Stats API, which broadcasts JSON events over a local WebSocket/TCP connection directly from the game engine. External cloud communication introduces non-deterministic delays due to network jitter, transient packet loss, DNS resolution, TLS handshakes, and remote service throttling. Performing those operations directly from the game process would risk coupling cloud responsiveness to gameplay-critical paths, potentially impacting frame pacing and render-thread stability.  
 A decision was therefore required to enforce fault containment between gameplay-critical telemetry extraction and best-effort cloud transport.
 
 ## Decision
-Telemetry extraction remains inside the BakkesMod plugin, but all external network I/O is delegated to a separate Rust daemon process. The plugin emits telemetry over a local socket only; it performs no direct cloud writes.
+The game engine emits telemetry natively over a local WebSocket/TCP endpoint. All external network I/O is delegated to a separate Rust daemon process. The game process performs no direct cloud writes.
 
 ## Rejected Alternatives
-- In-process HTTP communication from the C++ plugin to Firebase: rejected because it couples render-time behavior to unpredictable network latency and failure modes.
-- Direct cloud transport in the plugin with retry logic: rejected because retries amplify blocking windows and increase the probability of frame-time interference under outage conditions.
+- In-process HTTP communication from the game client to Firebase: rejected because it couples gameplay-critical timing to unpredictable network latency and failure modes.
+- Direct cloud transport from the game client with retry logic: rejected because retries amplify blocking windows and increase the probability of frame-time interference under outage conditions.
 
 ## Consequences
 
