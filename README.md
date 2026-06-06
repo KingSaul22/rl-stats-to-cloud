@@ -1,23 +1,19 @@
 # RL Stats to Cloud
 
-A Rust workspace designed for reliable Rocket League telemetry ingestion over a multi-lane
-pipeline, synchronizing live state, event feed, and historical match data to Firebase —
-paired with a Tauri v2 desktop UI for real-time monitoring and configuration.
+A Rust workspace designed for reliable, high-performance Rocket League telemetry ingestion over a multi-lane pipeline. It synchronizes live state, event feeds, historical match data, and cumulative team statistics to Firebase — paired with a Tauri v2 desktop UI for real-time monitoring and configuration.
 
 ## Status
 
-**Active development prototype** focused on:
+**Feature-complete (TFG Release).** The core daemon architecture is stable and focuses on:
 
-- Reliable telemetry ingestion
-- Firebase synchronization
-- Operational fault isolation
-- Desktop monitoring tooling
-
-**Current priorities:** schema stabilization, ingestion observability, and persistence guarantees.
+- **Zero-Data-Loss Ingestion:** Infinite retries with exponential backoff for historical data.
+- **Fail-Fast Self-Healing:** Independent actor monitoring that safely tears down and rebuilds the IPC/Network sessions if internal deadlocks or closed channels are detected.
+- **Database-Driven Roster Resolution:** Real-time matching of in-game players to registered eSports teams using a strict majority-rule algorithm.
+- **NoSQL Read Optimization:** Edge-computed aggregations and denormalized indexes to minimize downstream (Mobile/Frontend) read costs and latency.
 
 ## Architecture
 
-```
+```text
 Game Source (ws://127.0.0.1:49123)
         │
         ▼
@@ -35,8 +31,6 @@ Game Source (ws://127.0.0.1:49123)
 └─────────────────────────┘               └──────────────┘
 ```
 
-![Dashboard UI](docs/assets/dashboard.png)
-
 ## Quick Start
 
 ```bash
@@ -45,11 +39,12 @@ cargo run -p rl_stats_core
 
 # In a separate terminal, launch the Tauri desktop app
 bun run tauri dev
+
 ```
 
 ## Workspace Layout
 
-```
+```text
 Cargo workspace (Rust edition 2024)
 ├── core/         rl_stats_core — Daemon binary + library
 └── src-tauri/    rl-stats-to-cloud — Tauri v2 desktop client
@@ -57,29 +52,34 @@ Cargo workspace (Rust edition 2024)
 Frontend: Bun + Vite 6 + TypeScript 6 + Zod 4 (SPA, WebView-hosted)
 ```
 
-## Reliability Model
+## Reliability Model & Data Plane
 
 | Lane | Channel Type | Delivery Semantics | Backpressure Behaviour |
-|------|-------------|-------------------|----------------------|
-| **LiveState** | `watch` (single value) | At-most-once, deduplicated by seq | Always overwrites; oldest cedes to newest |
-| **EventFeed** | `mpsc` (bounded, cap 2048) | At-most-once, best-effort | Drops when full; max 3 send retries |
-| **Historical** | `mpsc` (bounded, cap 8192) | At-least-once, lossless | Infinite retry with exponential backoff (full jitter, 1s–32s) |
+| --- | --- | --- | --- |
+| **LiveState** | `watch` (single value) | At-most-once, deduplicated | Latest wins (coalesced); overwrites stale states |
+| **EventFeed** | `mpsc` (bounded, 2048) | At-most-once, best-effort | Drops when full to prevent memory bloat |
+| **Historical** | `mpsc` (bounded, 8192) | At-least-once, lossless | Infinite retry with exponential backoff (full jitter) |
 
-The Worker cannot stall: Historical backpressure never blocks LiveState or EventFeed.
+**Cross-Lane Synchronization:** The pipeline enforces strict flush barriers. Live states and event feeds are cleanly separated from state-compaction routines (e.g., during match transitions), guaranteeing atomic transitions without ghost matches or data bleed.
+
 See [docs/pipeline.md](docs/pipeline.md) for the full data plane specification.
 
-## Documentation
+## Documentation Highlights
 
-- [Architecture](docs/architecture.md) — service boundaries, IPC, ports, configuration
-- [Data Pipeline](docs/pipeline.md) — ingestion, classification, sink actors, retry policies
-- [Operations](docs/operations.md) — CLI control, lifecycle management, auto-timeout
-- [Development](docs/development.md) — validation, linting, dependency management
-- [ADR: Three-Lane Pipeline](docs/decisions/0001-three-lane-pipeline.md) — why we split telemetry
+The architecture is heavily documented. Below are key resources and Architecture Decision Records (ADRs):
+
+* **[Architecture Overview](docs/architecture.md)** — service boundaries, IPC, ports, configuration.
+* **[Data Pipeline](docs/pipeline.md)** — ingestion, classification, sink actors, retry policies.
+* **[ADR 0001: Three-Lane Pipeline](docs/decisions/0001-three-lane-pipeline.md)** — Core telemetry splitting logic.
+* **[ADR 0020: Strict Cross-Lane Barriers](docs/decisions/0020-strict-cross-lane-synchronization-barriers.md)** — Prevention of engine memory bleed during podiums.
+* **[ADR 0022: Majority Rule Roster Resolution](docs/decisions/0022-majority-rule-roster-resolution.md)** — Real-time team identity matching.
+* **[ADR 0023: Denormalized Team Stats in Matches Index](docs/decisions/0023-denormalized-team-stats-in-matches-index.md)** — NoSQL optimization for mobile client progression charts.
+
+*A complete list of 23 ADRs is available in the `docs/decisions/` directory.*
 
 ## Configuration
 
-On first run, the daemon creates `config.json` in the platform config directory.
-Use Firebase REST Authentication fields under the `connector` object:
+On the first run, the daemon creates `config.json` in the platform config directory. Use Firebase REST Authentication fields under the `connector` object:
 
 ```json
 {
