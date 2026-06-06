@@ -1,15 +1,19 @@
 use crate::connector::{SinkError, TelemetrySink};
-use crate::models::{CumulativePlayerStats, MatchIndexEntry, PlayerMatchLog};
-use futures_util::future::join_all;
+use crate::models::{
+    CumulativePlayerStats, CumulativeTeamStats, MatchIndexEntry, PlayerMatchLog,
+    PlayerRegistryEntry,
+};
+use futures_util::future::{join, join_all};
 use serde_json::Value;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 use tracing::{error, warn};
 
-use super::actors::calculate_full_jitter_backoff;
 use super::AGGREGATION_MAX_FAILURES;
+use super::actors::calculate_full_jitter_backoff;
 
 pub fn sanitize_firebase_key(key: &str) -> String {
     key.replace(['.', '#', '$', '/', '[', ']'], "_")
@@ -34,14 +38,21 @@ pub fn build_match_index_entry(match_id: &str, state: &Value) -> MatchIndexEntry
         blue_score,
         orange_score,
         match_id: match_id.to_string(),
+        blue_team_id: None,
+        blue_shots: 0,
+        blue_saves: 0,
+        blue_assists: 0,
+        blue_demos: 0,
+        orange_team_id: None,
+        orange_shots: 0,
+        orange_saves: 0,
+        orange_assists: 0,
+        orange_demos: 0,
     }
 }
 
 pub fn build_player_match_logs(match_id: &str, state: &Value) -> Vec<(String, PlayerMatchLog)> {
-    let Some(players) = state
-        .get("player_telemetry")
-        .and_then(Value::as_object)
-    else {
+    let Some(players) = state.get("player_telemetry").and_then(Value::as_object) else {
         return Vec::new();
     };
 
@@ -79,6 +90,20 @@ fn extract_i64(value: &Value, key: &str) -> i64 {
     value.get(key).and_then(Value::as_i64).unwrap_or(0)
 }
 
+fn sum_team_stats(players: &[&Value]) -> (u64, u64, u64, u64) {
+    let mut shots = 0_u64;
+    let mut saves = 0_u64;
+    let mut assists = 0_u64;
+    let mut demos = 0_u64;
+    for p in players {
+        shots = shots.saturating_add(extract_u64(p, "shots"));
+        saves = saves.saturating_add(extract_u64(p, "saves"));
+        assists = assists.saturating_add(extract_u64(p, "assists"));
+        demos = demos.saturating_add(extract_u64(p, "demos"));
+    }
+    (shots, saves, assists, demos)
+}
+
 fn extract_team(player_data: &Value) -> Option<u64> {
     player_data.get("team").and_then(Value::as_u64)
 }
@@ -97,10 +122,7 @@ fn compute_match_outcome(
         return (None, None);
     };
 
-    let Some(players) = state
-        .get("player_telemetry")
-        .and_then(Value::as_object)
-    else {
+    let Some(players) = state.get("player_telemetry").and_then(Value::as_object) else {
         return (Some(wt), None);
     };
 
@@ -113,36 +135,27 @@ fn compute_match_outcome(
     (Some(wt), max_score)
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "Aggregation orchestrates match index, player logs, cumulative player stats, and cumulative team stats in a single pass."
+)]
 pub async fn upload_aggregation(
     sink: &Arc<dyn TelemetrySink + Send + Sync>,
     match_id: &str,
     state: &Value,
     shutdown: &CancellationToken,
 ) {
-    let index_entry = build_match_index_entry(match_id, state);
+    let mut index_entry = build_match_index_entry(match_id, state);
     let player_logs = build_player_match_logs(match_id, state);
     let (winning_team, winning_team_max_score) = compute_match_outcome(state, &index_entry);
 
-    let mut upload_futures: Vec<std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>> = Vec::new();
+    let mut blue_ids: Vec<String> = Vec::new();
+    let mut orange_ids: Vec<String> = Vec::new();
+    let mut blue_players: Vec<&Value> = Vec::new();
+    let mut orange_players: Vec<&Value> = Vec::new();
 
-    let index_value = match serde_json::to_value(&index_entry) {
-        Ok(value) => value,
-        Err(err) => {
-            error!(
-                "Aggregation error: failed to serialize match index entry for match_id={match_id}: {err}"
-            );
-            Value::Null
-        }
-    };
-
-    if !index_value.is_null() {
-        upload_futures.push(Box::pin(upload_with_retry(
-            Arc::clone(sink),
-            format!("matches_index/{match_id}"),
-            index_value,
-            shutdown.clone(),
-        )));
-    }
+    let mut upload_futures: Vec<std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>> =
+        Vec::new();
 
     for (sanitized_id, log) in &player_logs {
         let log_value = match serde_json::to_value(log) {
@@ -163,10 +176,7 @@ pub async fn upload_aggregation(
         )));
     }
 
-    if let Some(players) = state
-        .get("player_telemetry")
-        .and_then(Value::as_object)
-    {
+    if let Some(players) = state.get("player_telemetry").and_then(Value::as_object) {
         for (player_id, player_data) in players {
             let sanitized_id = sanitize_firebase_key(player_id);
             let player_team = extract_team(player_data);
@@ -179,10 +189,7 @@ pub async fn upload_aggregation(
                 _ => false,
             };
 
-            if let Some((_, log)) = player_logs
-                .iter()
-                .find(|(sid, _)| sid == &sanitized_id)
-            {
+            if let Some((_, log)) = player_logs.iter().find(|(sid, _)| sid == &sanitized_id) {
                 upload_futures.push(Box::pin(update_cumulative_stats(
                     Arc::clone(sink),
                     sanitized_id.clone(),
@@ -196,13 +203,103 @@ pub async fn upload_aggregation(
         }
     }
 
+    // --- Team cumulative stats ---
+    if let Some(players) = state.get("player_telemetry").and_then(Value::as_object) {
+        for (player_id, player_data) in players {
+            let sanitized_id = sanitize_firebase_key(player_id);
+            match extract_team(player_data) {
+                Some(0) => {
+                    blue_ids.push(sanitized_id);
+                    blue_players.push(player_data);
+                }
+                Some(1) => {
+                    orange_ids.push(sanitized_id);
+                    orange_players.push(player_data);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let (blue_team_id, orange_team_id) = join(
+        resolve_team_id(sink, &blue_ids, match_id, "blue", shutdown),
+        resolve_team_id(sink, &orange_ids, match_id, "orange", shutdown),
+    )
+    .await;
+
+    let (blue_shots, blue_saves, blue_assists, blue_demos) = sum_team_stats(&blue_players);
+    let (orange_shots, orange_saves, orange_assists, orange_demos) =
+        sum_team_stats(&orange_players);
+
+    if !blue_ids.is_empty() {
+        index_entry.blue_team_id = Some(blue_team_id.clone());
+    }
+    index_entry.blue_shots = blue_shots;
+    index_entry.blue_saves = blue_saves;
+    index_entry.blue_assists = blue_assists;
+    index_entry.blue_demos = blue_demos;
+
+    if !orange_ids.is_empty() {
+        index_entry.orange_team_id = Some(orange_team_id.clone());
+    }
+    index_entry.orange_shots = orange_shots;
+    index_entry.orange_saves = orange_saves;
+    index_entry.orange_assists = orange_assists;
+    index_entry.orange_demos = orange_demos;
+
+    let index_value = match serde_json::to_value(&index_entry) {
+        Ok(value) => value,
+        Err(err) => {
+            error!(
+                "Aggregation error: failed to serialize match index entry for match_id={match_id}: {err}"
+            );
+            Value::Null
+        }
+    };
+
+    if !index_value.is_null() {
+        upload_futures.push(Box::pin(upload_with_retry(
+            Arc::clone(sink),
+            format!("matches_index/{match_id}"),
+            index_value,
+            shutdown.clone(),
+        )));
+    }
+
+    let blue_won = winning_team == Some(0);
+    if !blue_ids.is_empty() {
+        upload_futures.push(Box::pin(update_cumulative_team_stats(
+            Arc::clone(sink),
+            blue_team_id,
+            blue_shots,
+            blue_saves,
+            blue_assists,
+            blue_demos,
+            index_entry.blue_score,
+            index_entry.orange_score,
+            blue_won,
+            shutdown.clone(),
+        )));
+    }
+
+    if !orange_ids.is_empty() {
+        upload_futures.push(Box::pin(update_cumulative_team_stats(
+            Arc::clone(sink),
+            orange_team_id,
+            orange_shots,
+            orange_saves,
+            orange_assists,
+            orange_demos,
+            index_entry.orange_score,
+            index_entry.blue_score,
+            !blue_won,
+            shutdown.clone(),
+        )));
+    }
+
     join_all(upload_futures).await;
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "R-M-W flow spans GET, modify, and PUT with retries; splitting would add indirection without reducing overall complexity."
-)]
 async fn update_cumulative_stats(
     sink: Arc<dyn TelemetrySink + Send + Sync>,
     sanitized_id: String,
@@ -296,9 +393,7 @@ async fn update_cumulative_stats(
                 );
                 return;
             }
-            Err(
-                SinkError::RateLimited { .. } | SinkError::TransientNetwork { .. },
-            ) => {
+            Err(SinkError::RateLimited { .. } | SinkError::TransientNetwork { .. }) => {
                 failures = failures.saturating_add(1);
                 if failures > AGGREGATION_MAX_FAILURES {
                     warn!(
@@ -310,6 +405,178 @@ async fn update_cumulative_stats(
                 let delay = calculate_full_jitter_backoff(failures);
                 warn!(
                     "Aggregation warning: retrying put for player={sanitized_id} failures={failures} retrying_in_ms={}.",
+                    delay.as_millis()
+                );
+                tokio::select! {
+                    () = shutdown.cancelled() => return,
+                    () = sleep(delay) => {}
+                }
+            }
+        }
+    }
+}
+
+async fn resolve_team_id(
+    sink: &Arc<dyn TelemetrySink + Send + Sync>,
+    sanitized_ids: &[String],
+    match_id: &str,
+    team_label: &str,
+    shutdown: &CancellationToken,
+) -> String {
+    let mut fetch_futures: Vec<
+        std::pin::Pin<Box<dyn std::future::Future<Output = Option<String>> + Send>>,
+    > = Vec::new();
+
+    for id in sanitized_ids {
+        let sink = Arc::clone(sink);
+        let path = format!("players/{id}");
+        let shutdown = shutdown.clone();
+
+        fetch_futures.push(Box::pin(async move {
+            if shutdown.is_cancelled() {
+                return None;
+            }
+            match sink.get_node(&path).await {
+                Ok(Some(value)) => serde_json::from_value::<PlayerRegistryEntry>(value)
+                    .ok()
+                    .and_then(|entry| entry.team_id),
+                _ => None,
+            }
+        }));
+    }
+
+    let results: Vec<Option<String>> = join_all(fetch_futures).await;
+
+    let mut counts: HashMap<String, usize> = HashMap::new();
+    for team_id in results.into_iter().flatten() {
+        *counts.entry(team_id).or_default() += 1;
+    }
+
+    let max_entry = counts.iter().max_by_key(|(_, count)| *count);
+
+    match max_entry {
+        Some((team_id, &count)) if count > 0 => {
+            let is_majority = counts
+                .iter()
+                .all(|(other_id, &other_count)| other_id == team_id || count > other_count);
+            if is_majority {
+                return team_id.clone();
+            }
+        }
+        _ => {}
+    }
+
+    format!("temp_{match_id}_{team_label}")
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Team stats R-M-W requires pre-computed sums, match scores, win flag, and shutdown token."
+)]
+async fn update_cumulative_team_stats(
+    sink: Arc<dyn TelemetrySink + Send + Sync>,
+    team_id: String,
+    shots_total: u64,
+    saves_total: u64,
+    assists_total: u64,
+    demos_total: u64,
+    goals_for: u64,
+    goals_against: u64,
+    won: bool,
+    shutdown: CancellationToken,
+) {
+    let path = format!("stats_cumulative_teams/{team_id}");
+    let mut failures = 0_u32;
+
+    loop {
+        if shutdown.is_cancelled() {
+            return;
+        }
+
+        let cumulative = match sink.get_node(&path).await {
+            Ok(Some(value)) => {
+                serde_json::from_value::<CumulativeTeamStats>(value).unwrap_or_else(|err| {
+                    warn!(
+                        "Aggregation warning: failed to parse cumulative team stats for team_id={team_id}: {err}. Falling back to default."
+                    );
+                    CumulativeTeamStats::default()
+                })
+            }
+            Ok(None) => CumulativeTeamStats::default(),
+            Err(SinkError::Terminal { message }) => {
+                error!(
+                    "Aggregation error: terminal failure getting cumulative team stats for team_id={team_id}: {message}"
+                );
+                return;
+            }
+            Err(
+                SinkError::RateLimited { .. } | SinkError::TransientNetwork { .. },
+            ) => {
+                failures = failures.saturating_add(1);
+                if failures > AGGREGATION_MAX_FAILURES {
+                    warn!(
+                        "Aggregation warning: exceeded max failures ({AGGREGATION_MAX_FAILURES}) getting cumulative team stats for team_id={team_id}"
+                    );
+                    return;
+                }
+
+                let delay = calculate_full_jitter_backoff(failures);
+                warn!(
+                    "Aggregation warning: retrying get for team_id={team_id} failures={failures} retrying_in_ms={}.",
+                    delay.as_millis()
+                );
+                tokio::select! {
+                    () = shutdown.cancelled() => return,
+                    () = sleep(delay) => {}
+                }
+                continue;
+            }
+        };
+
+        let mut cumulative = cumulative;
+        cumulative.matches_played = cumulative.matches_played.saturating_add(1);
+        if won {
+            cumulative.wins = cumulative.wins.saturating_add(1);
+        } else {
+            cumulative.losses = cumulative.losses.saturating_add(1);
+        }
+        cumulative.goals_for = cumulative.goals_for.saturating_add(goals_for);
+        cumulative.goals_against = cumulative.goals_against.saturating_add(goals_against);
+        cumulative.shots = cumulative.shots.saturating_add(shots_total);
+        cumulative.saves = cumulative.saves.saturating_add(saves_total);
+        cumulative.assists = cumulative.assists.saturating_add(assists_total);
+        cumulative.demos = cumulative.demos.saturating_add(demos_total);
+
+        let data = match serde_json::to_value(&cumulative) {
+            Ok(v) => v,
+            Err(err) => {
+                error!(
+                    "Aggregation error: failed to serialize cumulative team stats for team_id={team_id}: {err}"
+                );
+                return;
+            }
+        };
+
+        match sink.put_node(&path, &data).await {
+            Ok(()) => return,
+            Err(SinkError::Terminal { message }) => {
+                error!(
+                    "Aggregation error: terminal failure putting cumulative team stats for team_id={team_id}: {message}"
+                );
+                return;
+            }
+            Err(SinkError::RateLimited { .. } | SinkError::TransientNetwork { .. }) => {
+                failures = failures.saturating_add(1);
+                if failures > AGGREGATION_MAX_FAILURES {
+                    warn!(
+                        "Aggregation warning: exceeded max failures ({AGGREGATION_MAX_FAILURES}) putting cumulative team stats for team_id={team_id}"
+                    );
+                    return;
+                }
+
+                let delay = calculate_full_jitter_backoff(failures);
+                warn!(
+                    "Aggregation warning: retrying put for team_id={team_id} failures={failures} retrying_in_ms={}.",
                     delay.as_millis()
                 );
                 tokio::select! {
@@ -336,14 +603,10 @@ async fn upload_with_retry(
         match sink.put_node(&path, &data).await {
             Ok(()) => return,
             Err(SinkError::Terminal { message }) => {
-                error!(
-                    "Aggregation error: terminal failure putting node={path}: {message}"
-                );
+                error!("Aggregation error: terminal failure putting node={path}: {message}");
                 return;
             }
-            Err(
-                SinkError::RateLimited { .. } | SinkError::TransientNetwork { .. },
-            ) => {
+            Err(SinkError::RateLimited { .. } | SinkError::TransientNetwork { .. }) => {
                 failures = failures.saturating_add(1);
                 if failures > AGGREGATION_MAX_FAILURES {
                     warn!(
@@ -495,8 +758,7 @@ mod tests {
             "goals": 5,
             "saves": 3
         });
-        let stats: CumulativePlayerStats =
-            serde_json::from_value(json).unwrap_or_default();
+        let stats: CumulativePlayerStats = serde_json::from_value(json).unwrap_or_default();
         assert_eq!(stats.goals, 5);
         assert_eq!(stats.saves, 3);
         assert_eq!(stats.assists, 0);
@@ -521,6 +783,16 @@ mod tests {
             blue_score: 3,
             orange_score: 2,
             match_id: "match_1".to_string(),
+            blue_team_id: None,
+            blue_shots: 0,
+            blue_saves: 0,
+            blue_assists: 0,
+            blue_demos: 0,
+            orange_team_id: None,
+            orange_shots: 0,
+            orange_saves: 0,
+            orange_assists: 0,
+            orange_demos: 0,
         };
         let (team, max_score) = compute_match_outcome(&state, &index);
         assert_eq!(team, Some(0));
@@ -541,6 +813,16 @@ mod tests {
             blue_score: 1,
             orange_score: 4,
             match_id: "match_1".to_string(),
+            blue_team_id: None,
+            blue_shots: 0,
+            blue_saves: 0,
+            blue_assists: 0,
+            blue_demos: 0,
+            orange_team_id: None,
+            orange_shots: 0,
+            orange_saves: 0,
+            orange_assists: 0,
+            orange_demos: 0,
         };
         let (team, max_score) = compute_match_outcome(&state, &index);
         assert_eq!(team, Some(1));
@@ -559,6 +841,16 @@ mod tests {
             blue_score: 2,
             orange_score: 2,
             match_id: "match_1".to_string(),
+            blue_team_id: None,
+            blue_shots: 0,
+            blue_saves: 0,
+            blue_assists: 0,
+            blue_demos: 0,
+            orange_team_id: None,
+            orange_shots: 0,
+            orange_saves: 0,
+            orange_assists: 0,
+            orange_demos: 0,
         };
         let (team, max_score) = compute_match_outcome(&state, &index);
         assert_eq!(team, None);
@@ -575,6 +867,16 @@ mod tests {
             blue_score: 0,
             orange_score: 0,
             match_id: "match_1".to_string(),
+            blue_team_id: None,
+            blue_shots: 0,
+            blue_saves: 0,
+            blue_assists: 0,
+            blue_demos: 0,
+            orange_team_id: None,
+            orange_shots: 0,
+            orange_saves: 0,
+            orange_assists: 0,
+            orange_demos: 0,
         };
         let (team, max_score) = compute_match_outcome(&state, &index);
         assert_eq!(team, None);
@@ -591,5 +893,77 @@ mod tests {
     fn extract_team_missing_returns_none() {
         let player = json!({});
         assert_eq!(extract_team(&player), None);
+    }
+
+    #[test]
+    fn player_registry_deserializes_with_team_id() {
+        let json = json!({"team_id": "EG"});
+        let entry: PlayerRegistryEntry = serde_json::from_value(json).unwrap_or_default();
+        assert_eq!(entry.team_id, Some("EG".to_string()));
+    }
+
+    #[test]
+    fn player_registry_deserializes_missing_team_id() {
+        let json = json!({});
+        let entry: PlayerRegistryEntry = serde_json::from_value(json).unwrap_or_default();
+        assert_eq!(entry.team_id, None);
+    }
+
+    #[test]
+    fn player_registry_deserializes_with_unknown_fields() {
+        let json = json!({"team_id": "NRG", "rank": "Diamond"});
+        let entry: PlayerRegistryEntry = serde_json::from_value(json).unwrap_or_default();
+        assert_eq!(entry.team_id, Some("NRG".to_string()));
+    }
+
+    #[test]
+    fn cumulative_team_stats_default_is_all_zeros() {
+        let stats = CumulativeTeamStats::default();
+        assert_eq!(stats.matches_played, 0);
+        assert_eq!(stats.wins, 0);
+        assert_eq!(stats.losses, 0);
+        assert_eq!(stats.goals_for, 0);
+        assert_eq!(stats.goals_against, 0);
+        assert_eq!(stats.shots, 0);
+        assert_eq!(stats.saves, 0);
+        assert_eq!(stats.assists, 0);
+        assert_eq!(stats.demos, 0);
+    }
+
+    #[test]
+    fn cumulative_team_stats_deserializes_partial_json() {
+        let json = json!({"wins": 5, "goals_for": 12});
+        let stats: CumulativeTeamStats = serde_json::from_value(json).unwrap_or_default();
+        assert_eq!(stats.wins, 5);
+        assert_eq!(stats.goals_for, 12);
+        assert_eq!(stats.matches_played, 0);
+        assert_eq!(stats.losses, 0);
+    }
+
+    #[test]
+    fn match_index_entry_includes_team_ids_and_stats() {
+        let entry = MatchIndexEntry {
+            timestamp: 0,
+            blue_score: 3,
+            orange_score: 2,
+            match_id: "m1".to_string(),
+            blue_team_id: Some("eclipse_total".to_string()),
+            blue_shots: 8,
+            blue_saves: 2,
+            blue_assists: 3,
+            blue_demos: 1,
+            orange_team_id: None,
+            orange_shots: 4,
+            orange_saves: 0,
+            orange_assists: 1,
+            orange_demos: 0,
+        };
+        let v = serde_json::to_value(&entry).unwrap_or_default();
+        assert_eq!(v["blue_team_id"], json!("eclipse_total"));
+        assert_eq!(v["orange_team_id"], json!(null));
+        assert_eq!(v["blue_shots"], json!(8));
+        assert_eq!(v["blue_saves"], json!(2));
+        assert_eq!(v["blue_assists"], json!(3));
+        assert_eq!(v["blue_demos"], json!(1));
     }
 }

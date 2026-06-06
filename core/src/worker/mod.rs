@@ -126,6 +126,8 @@ impl RocketLeagueWorker {
         let mut last_compaction_seq = 0_u64;
         let mut cached_game_seconds_remaining = None;
         let mut last_aggregated_match_id: Option<String> = None;
+        let mut cached_podium_active = false;
+        let mut cached_historical_active = false;
 
         loop {
             if shutdown.is_cancelled() {
@@ -146,6 +148,8 @@ impl RocketLeagueWorker {
                     &mut last_compaction_seq,
                     &mut cached_game_seconds_remaining,
                     &mut last_aggregated_match_id,
+                    &mut cached_podium_active,
+                    &mut cached_historical_active,
                     &mut session_context,
                     &mut routing_stats,
                 ) => result,
@@ -211,6 +215,8 @@ impl RocketLeagueWorker {
         last_compaction_seq: &mut u64,
         cached_game_seconds_remaining: &mut Option<u64>,
         last_aggregated_match_id: &mut Option<String>,
+        cached_podium_active: &mut bool,
+        cached_historical_active: &mut bool,
         session_context: &mut SessionContext,
         routing_stats: &mut RoutingStats,
     ) -> Result<(), String> {
@@ -224,6 +230,8 @@ impl RocketLeagueWorker {
                     last_compaction_seq,
                     cached_game_seconds_remaining,
                     last_aggregated_match_id,
+                    cached_podium_active,
+                    cached_historical_active,
                     session_context,
                     routing_stats,
                 )
@@ -239,6 +247,8 @@ impl RocketLeagueWorker {
                 last_compaction_seq,
                 cached_game_seconds_remaining,
                 last_aggregated_match_id,
+                cached_podium_active,
+                cached_historical_active,
                 session_context,
                 routing_stats,
             )
@@ -258,6 +268,8 @@ impl RocketLeagueWorker {
                         last_compaction_seq,
                         cached_game_seconds_remaining,
                         last_aggregated_match_id,
+                        cached_podium_active,
+                        cached_historical_active,
                         session_context,
                         routing_stats,
                     )
@@ -282,6 +294,8 @@ impl RocketLeagueWorker {
         last_compaction_seq: &mut u64,
         cached_game_seconds_remaining: &mut Option<u64>,
         last_aggregated_match_id: &mut Option<String>,
+        cached_podium_active: &mut bool,
+        cached_historical_active: &mut bool,
         session_context: &mut SessionContext,
         routing_stats: &mut RoutingStats,
     ) -> Result<(), String> {
@@ -320,6 +334,8 @@ impl RocketLeagueWorker {
                         last_compaction_seq,
                         cached_game_seconds_remaining,
                         last_aggregated_match_id,
+                        cached_podium_active,
+                        cached_historical_active,
                         session_context,
                         routing_stats,
                     )
@@ -336,6 +352,8 @@ impl RocketLeagueWorker {
                             last_compaction_seq,
                             cached_game_seconds_remaining,
                             last_aggregated_match_id,
+                            cached_podium_active,
+                            cached_historical_active,
                             session_context,
                             routing_stats,
                         )
@@ -373,6 +391,8 @@ impl RocketLeagueWorker {
         last_compaction_seq: &mut u64,
         cached_game_seconds_remaining: &mut Option<u64>,
         last_aggregated_match_id: &mut Option<String>,
+        cached_podium_active: &mut bool,
+        cached_historical_active: &mut bool,
         session_context: &mut SessionContext,
         routing_stats: &mut RoutingStats,
     ) -> Result<(), String> {
@@ -416,6 +436,8 @@ impl RocketLeagueWorker {
                 last_compaction_seq,
                 cached_game_seconds_remaining,
                 last_aggregated_match_id,
+                cached_podium_active,
+                cached_historical_active,
                 session_context,
                 routing_stats,
             )
@@ -482,6 +504,8 @@ impl RocketLeagueWorker {
         last_compaction_seq: &mut u64,
         cached_game_seconds_remaining: &mut Option<u64>,
         last_aggregated_match_id: &mut Option<String>,
+        cached_podium_active: &mut bool,
+        cached_historical_active: &mut bool,
         session_context: &mut SessionContext,
         routing_stats: &mut RoutingStats,
     ) {
@@ -505,6 +529,8 @@ impl RocketLeagueWorker {
                         last_compaction_seq,
                         cached_game_seconds_remaining,
                         last_aggregated_match_id,
+                        cached_podium_active,
+                        cached_historical_active,
                         session_context,
                         routing_stats,
                     )
@@ -544,6 +570,8 @@ impl RocketLeagueWorker {
         last_compaction_seq: &mut u64,
         cached_game_seconds_remaining: &mut Option<u64>,
         last_aggregated_match_id: &mut Option<String>,
+        cached_podium_active: &mut bool,
+        cached_historical_active: &mut bool,
         session_context: &mut SessionContext,
         routing_stats: &mut RoutingStats,
     ) {
@@ -564,6 +592,8 @@ impl RocketLeagueWorker {
             last_compaction_seq,
             cached_game_seconds_remaining,
             last_aggregated_match_id,
+            cached_podium_active,
+            cached_historical_active,
             session_context,
             routing_stats,
         )
@@ -573,6 +603,10 @@ impl RocketLeagueWorker {
     #[expect(
         clippy::too_many_arguments,
         reason = "Value handler requires routing/session/compaction shared mutable state."
+    )]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "Value handler spans event classification, compaction trigger detection, flush, aggregation, and reset."
     )]
     async fn handle_value(
         &self,
@@ -584,6 +618,8 @@ impl RocketLeagueWorker {
         last_compaction_seq: &mut u64,
         cached_game_seconds_remaining: &mut Option<u64>,
         last_aggregated_match_id: &mut Option<String>,
+        cached_podium_active: &mut bool,
+        cached_historical_active: &mut bool,
         session_context: &mut SessionContext,
         routing_stats: &mut RoutingStats,
     ) {
@@ -613,6 +649,8 @@ impl RocketLeagueWorker {
         match parsed_event {
             RocketLeagueEvent::GoalReplayStart => session_context.in_replay = true,
             RocketLeagueEvent::GoalReplayEnd => session_context.in_replay = false,
+            RocketLeagueEvent::MatchEnded => *cached_podium_active = true,
+            RocketLeagueEvent::MatchInitialized => *cached_historical_active = true,
             _ => {}
         }
 
@@ -644,17 +682,18 @@ impl RocketLeagueWorker {
                         .and_then(Value::as_object)
                         .is_some_and(|obj| !obj.is_empty());
 
-                    let snapshot_match_id = state
-                        .get("match_id")
-                        .and_then(Value::as_str)
-                        .map(ToString::to_string);
+                    let already_aggregated = last_aggregated_match_id.as_deref().unwrap_or("")
+                        == previous_match_id.as_str();
 
-                    let already_aggregated = snapshot_match_id.as_deref()
-                        == last_aggregated_match_id.as_deref();
-
-                    if has_players && !already_aggregated {
-                        aggregation::upload_aggregation(sink, previous_match_id.as_str(), &state, shutdown).await;
-                        *last_aggregated_match_id = snapshot_match_id;
+                    if has_players && !already_aggregated && *cached_historical_active {
+                        aggregation::upload_aggregation(
+                            sink,
+                            previous_match_id.as_str(),
+                            &state,
+                            shutdown,
+                        )
+                        .await;
+                        *last_aggregated_match_id = Some(previous_match_id.clone());
                     }
 
                     let _ = lanes.live_state.send(TransientLaneMessage::Reset).await;
@@ -674,6 +713,13 @@ impl RocketLeagueWorker {
                         "Compaction warning: cleanup failed at seq={} reason={reason:?} previous_match_id={} next_match_id={} error={}",
                         *sequence, previous_match_id, session_context.active_match_id, err
                     );
+                }
+                if matches!(
+                    reason,
+                    CompactionReason::IdTransition | CompactionReason::Destroyed
+                ) {
+                    *cached_podium_active = false;
+                    *cached_historical_active = false;
                 }
             }
 
@@ -702,6 +748,8 @@ impl RocketLeagueWorker {
             lanes,
             routing_stats,
             *cached_game_seconds_remaining,
+            *cached_podium_active,
+            *cached_historical_active,
         );
     }
 
@@ -915,6 +963,8 @@ impl RocketLeagueWorker {
         lanes: &RoutingLanes,
         routing_stats: &mut RoutingStats,
         cached_game_seconds_remaining: Option<u64>,
+        podium_active: bool,
+        historical_active: bool,
     ) {
         let should_mirror = Self::is_high_value_historical_event(envelope.event_type.as_str());
 
@@ -922,9 +972,11 @@ impl RocketLeagueWorker {
             IngestClass::LiveState => Self::try_send_live_state(envelope, lanes, routing_stats),
             IngestClass::EventFeed => {
                 let is_lifecycle = Self::is_lifecycle_event(envelope.event_type.as_str());
-                let should_send_to_historical = is_lifecycle || should_mirror;
+                let is_match_initialized = envelope.event_type.as_str() == "MatchInitialized";
+                let should_send_to_historical =
+                    should_mirror || (is_lifecycle && historical_active) || is_match_initialized;
                 let historical_copy = should_send_to_historical.then(|| envelope.clone());
-                if !is_lifecycle {
+                if !is_lifecycle && !podium_active {
                     Self::try_send_event_feed(envelope, lanes, routing_stats);
                 }
                 if let Some(copy) = historical_copy {
@@ -935,7 +987,9 @@ impl RocketLeagueWorker {
             }
             IngestClass::Historical => {
                 let is_lifecycle = Self::is_lifecycle_event(envelope.event_type.as_str());
-                let event_feed_copy = (!is_lifecycle).then(|| should_mirror.then(|| envelope.clone())).flatten();
+                let event_feed_copy = (!is_lifecycle)
+                    .then(|| should_mirror.then(|| envelope.clone()))
+                    .flatten();
                 let enriched =
                     Self::enrich_historical_timing(envelope, cached_game_seconds_remaining);
                 Self::try_send_historical(enriched, lanes, routing_stats);
@@ -1085,7 +1139,10 @@ impl RocketLeagueWorker {
     }
 
     fn is_lifecycle_event(event_type: &str) -> bool {
-        matches!(event_type, "MatchEnded" | "MatchDestroyed" | "MatchInitialized")
+        matches!(
+            event_type,
+            "MatchEnded" | "MatchDestroyed" | "MatchInitialized"
+        )
     }
 
     const fn classify_event(event: &RocketLeagueEvent) -> IngestClass {
@@ -1375,7 +1432,14 @@ mod tests {
             active_match_id: "match_1".to_string(),
         };
 
-        RocketLeagueWorker::route_envelope(envelope, &lanes, &mut routing_stats, None);
+        RocketLeagueWorker::route_envelope(
+            envelope,
+            &lanes,
+            &mut routing_stats,
+            None,
+            false,
+            false,
+        );
 
         let feed_message = event_feed_receiver.try_recv();
         assert!(matches!(
@@ -1418,7 +1482,14 @@ mod tests {
             active_match_id: "match_1".to_string(),
         };
 
-        RocketLeagueWorker::route_envelope(envelope, &lanes, &mut routing_stats, None);
+        RocketLeagueWorker::route_envelope(
+            envelope,
+            &lanes,
+            &mut routing_stats,
+            None,
+            false,
+            false,
+        );
 
         let historical_message = historical_receiver.try_recv();
         assert!(matches!(
