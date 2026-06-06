@@ -257,7 +257,18 @@ pub enum AuthError {
 impl fmt::Display for AuthError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Request(err) => write!(f, "firebase auth request error: {err}"),
+            Self::Request(err) => {
+                let mut output = err.to_string();
+                if let Some(start) = output.find("key=") {
+                    let value_start = start + "key=".len();
+                    // Locate the exact end of the API key value without swallowing trailing text
+                    let value_end = output[value_start..]
+                        .find(|c: char| !c.is_ascii_alphanumeric() && c != '-' && c != '_')
+                        .map_or(output.len(), |idx| value_start + idx);
+                    output.replace_range(value_start..value_end, "[REDACTED]");
+                }
+                write!(f, "firebase auth request error: {output}")
+            }
             Self::HttpStatus { status, body } => {
                 write!(f, "firebase auth failed with status {status}: {body}")
             }
@@ -314,7 +325,12 @@ fn parse_expires_in(expires_in: &str) -> Result<u64, AuthError> {
 }
 
 fn compute_expires_at(expires_in_secs: u64) -> SystemTime {
-    SystemTime::now() + Duration::from_secs(expires_in_secs)
+    SystemTime::now()
+        .checked_add(Duration::from_secs(expires_in_secs))
+        .unwrap_or_else(|| {
+            // Safe fallback to prevent an immediate re-auth infinite loop
+            SystemTime::now() + Duration::from_hours(1)
+        })
 }
 
 fn token_needs_refresh(expires_at: SystemTime) -> bool {
@@ -324,7 +340,16 @@ fn token_needs_refresh(expires_at: SystemTime) -> bool {
 }
 
 fn redact_error_body(body: &str) -> String {
-    body.to_string()
+    serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("error")
+                .and_then(|err| err.get("message"))
+                .and_then(serde_json::Value::as_str)
+                .map(ToString::to_string)
+        })
+        .unwrap_or_else(|| "<firebase error body redacted>".to_string())
 }
 
 fn normalize_password(password: Option<String>) -> Option<String> {
