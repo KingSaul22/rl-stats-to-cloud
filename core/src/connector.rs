@@ -55,9 +55,36 @@ impl fmt::Display for SinkError {
 
 impl Error for SinkError {}
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SinkLane {
+    LiveState,
+    EventFeed,
+    Historical,
+}
+
+impl SinkLane {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::LiveState => "live_state",
+            Self::EventFeed => "event_feed",
+            Self::Historical => "historical",
+        }
+    }
+}
+
 #[async_trait]
 pub trait EventSink: Send + Sync {
     async fn send_event(&self, event_type: &str, payload: &Value) -> Result<(), SinkError>;
+
+    async fn send_event_on_lane(
+        &self,
+        _lane: SinkLane,
+        event_type: &str,
+        payload: &Value,
+    ) -> Result<(), SinkError> {
+        self.send_event(event_type, payload).await
+    }
 
     /// Deletes a connector node when supported by the backend sink.
     ///
@@ -81,6 +108,15 @@ pub struct NullSink;
 #[async_trait]
 impl EventSink for NullSink {
     async fn send_event(&self, _event_type: &str, _payload: &Value) -> Result<(), SinkError> {
+        Ok(())
+    }
+
+    async fn send_event_on_lane(
+        &self,
+        _lane: SinkLane,
+        _event_type: &str,
+        _payload: &Value,
+    ) -> Result<(), SinkError> {
         Ok(())
     }
 

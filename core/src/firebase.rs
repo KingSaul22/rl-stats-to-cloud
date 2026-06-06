@@ -1,4 +1,4 @@
-use crate::connector::{EventSink, SinkError};
+use crate::connector::{EventSink, SinkError, SinkLane};
 use crate::firebase_auth::FirebaseAuth;
 use async_trait::async_trait;
 use reqwest::Client;
@@ -44,14 +44,22 @@ impl FirebaseConnector {
         })
     }
 
-    async fn push_event(&self, event_type: &str, payload: &Value) -> Result<(), SinkError> {
+    async fn push_event(
+        &self,
+        event_type: &str,
+        payload: &Value,
+        lane: Option<SinkLane>,
+    ) -> Result<(), SinkError> {
         let match_id = payload
             .get("match_id")
             .and_then(Value::as_str)
             .unwrap_or("unknown_match");
         let _session_id = payload.get("session_id").and_then(Value::as_str);
 
-        let route = FirebaseRoute::from_event_type(event_type);
+        let route = lane.map_or_else(
+            || FirebaseRoute::from_event_type(event_type),
+            FirebaseRoute::from_lane,
+        );
         let endpoint = route.endpoint_path(match_id);
         let auth_token = self.auth.get_token().await.map_err(|err| {
             let message = format!("firebase auth token retrieval failed: {err}");
@@ -175,7 +183,16 @@ impl FirebaseConnector {
 #[async_trait]
 impl EventSink for FirebaseConnector {
     async fn send_event(&self, event_type: &str, payload: &Value) -> Result<(), SinkError> {
-        self.push_event(event_type, payload).await
+        self.push_event(event_type, payload, None).await
+    }
+
+    async fn send_event_on_lane(
+        &self,
+        lane: SinkLane,
+        event_type: &str,
+        payload: &Value,
+    ) -> Result<(), SinkError> {
+        self.push_event(event_type, payload, Some(lane)).await
     }
 
     async fn delete_node(&self, path: &str) -> Result<(), SinkError> {
@@ -191,6 +208,14 @@ enum FirebaseRoute {
 }
 
 impl FirebaseRoute {
+    const fn from_lane(lane: SinkLane) -> Self {
+        match lane {
+            SinkLane::LiveState => Self::LiveState,
+            SinkLane::EventFeed => Self::EventFeed,
+            SinkLane::Historical => Self::Historical,
+        }
+    }
+
     fn from_event_type(event_type: &str) -> Self {
         if matches!(
             event_type,
@@ -216,6 +241,7 @@ impl FirebaseRoute {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::connector::SinkLane;
 
     #[test]
     fn from_event_type_maps_live_state_events_to_live_state() {
@@ -258,6 +284,22 @@ mod tests {
         assert_eq!(
             FirebaseRoute::EventFeed.endpoint_path("ignored_match"),
             "live_events_feed"
+        );
+    }
+
+    #[test]
+    fn from_lane_keeps_goal_scored_on_event_feed_when_lane_is_event_feed() {
+        assert_eq!(
+            FirebaseRoute::from_lane(SinkLane::EventFeed),
+            FirebaseRoute::EventFeed
+        );
+    }
+
+    #[test]
+    fn from_lane_keeps_statfeed_event_on_historical_when_lane_is_historical() {
+        assert_eq!(
+            FirebaseRoute::from_lane(SinkLane::Historical),
+            FirebaseRoute::Historical
         );
     }
 
