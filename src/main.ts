@@ -136,7 +136,7 @@ async function handleSaveConfig(event: Event): Promise<void> {
 
   if (!hasRequiredFirebaseCredentials(newConfig)) {
     logError("handleSaveConfig", "Missing required Firebase credentials.");
-    renderSaveMessage("api_key, email, and password are required.", false);
+    renderSaveMessage("Firebase Api Key, email, and password are required.", false);
     setFormButtonState(false, previousButtonLabel || "Save Configuration");
     return;
   }
