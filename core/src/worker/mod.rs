@@ -1,6 +1,7 @@
 use crate::SinkReceiver;
 use crate::StateSender;
 use crate::config::AppConfig;
+use crate::connector::{SinkError, TelemetrySink};
 use futures_util::StreamExt;
 use serde_json::Value;
 use std::sync::Arc;
@@ -34,6 +35,15 @@ const HISTORICAL_CAPACITY: usize = 8_192;
 const RETRY_BACKOFF_BASE_SECONDS: u64 = 1;
 const RETRY_BACKOFF_MAX_SECONDS: u64 = 32;
 const EVENT_FEED_MAX_FAILURES: u32 = 3;
+const COMPACTION_MAX_FAILURES: u32 = 3;
+const COMPACTION_TARGETS: [&str; 2] = ["live_state", "live_events_feed"];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CompactionReason {
+    Destroyed,
+    Ended,
+    IdTransition,
+}
 
 #[derive(Clone)]
 struct RoutingLanes {
@@ -101,12 +111,13 @@ impl RocketLeagueWorker {
         ));
         let historical_task = tokio::spawn(run_historical_actor(
             historical_receiver,
-            sink,
+            Arc::clone(&sink),
             shutdown.clone(),
         ));
 
         let mut routing_stats = RoutingStats::default();
         let mut sequence = 0_u64;
+        let mut last_compaction_seq = 0_u64;
 
         loop {
             if shutdown.is_cancelled() {
@@ -122,7 +133,9 @@ impl RocketLeagueWorker {
                 result = self.run_session(
                     &shutdown,
                     &lanes,
+                    &sink,
                     &mut sequence,
+                    &mut last_compaction_seq,
                     &mut session_context,
                     &mut routing_stats,
                 ) => result,
@@ -175,22 +188,44 @@ impl RocketLeagueWorker {
         }
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Session runner coordinates transport, routing, and lifecycle state."
+    )]
     async fn run_session(
         &self,
         shutdown: &CancellationToken,
         lanes: &RoutingLanes,
+        sink: &Arc<dyn TelemetrySink + Send + Sync>,
         sequence: &mut u64,
+        last_compaction_seq: &mut u64,
         session_context: &mut SessionContext,
         routing_stats: &mut RoutingStats,
     ) -> Result<(), String> {
         if self.websocket_url.starts_with("tcp://") {
             return self
-                .run_raw_tcp_session(shutdown, lanes, sequence, session_context, routing_stats)
+                .run_raw_tcp_session(
+                    shutdown,
+                    lanes,
+                    sink,
+                    sequence,
+                    last_compaction_seq,
+                    session_context,
+                    routing_stats,
+                )
                 .await;
         }
 
         match self
-            .run_websocket_session(shutdown, lanes, sequence, session_context, routing_stats)
+            .run_websocket_session(
+                shutdown,
+                lanes,
+                sink,
+                sequence,
+                last_compaction_seq,
+                session_context,
+                routing_stats,
+            )
             .await
         {
             Ok(()) => Ok(()),
@@ -202,7 +237,9 @@ impl RocketLeagueWorker {
                     self.run_raw_tcp_session(
                         shutdown,
                         lanes,
+                        sink,
                         sequence,
+                        last_compaction_seq,
                         session_context,
                         routing_stats,
                     )
@@ -214,11 +251,17 @@ impl RocketLeagueWorker {
         }
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "WebSocket loop needs shared mutable routing/session state references."
+    )]
     async fn run_websocket_session(
         &self,
         shutdown: &CancellationToken,
         lanes: &RoutingLanes,
+        sink: &Arc<dyn TelemetrySink + Send + Sync>,
         sequence: &mut u64,
+        last_compaction_seq: &mut u64,
         session_context: &mut SessionContext,
         routing_stats: &mut RoutingStats,
     ) -> Result<(), String> {
@@ -252,10 +295,13 @@ impl RocketLeagueWorker {
                         &text,
                         shutdown,
                         lanes,
+                        sink,
                         sequence,
+                        last_compaction_seq,
                         session_context,
                         routing_stats,
-                    );
+                    )
+                    .await;
                 }
                 Message::Binary(bytes) => match String::from_utf8(bytes.clone()) {
                     Ok(text) => {
@@ -263,10 +309,13 @@ impl RocketLeagueWorker {
                             &text,
                             shutdown,
                             lanes,
+                            sink,
                             sequence,
+                            last_compaction_seq,
                             session_context,
                             routing_stats,
-                        );
+                        )
+                        .await;
                     }
                     Err(err) => eprintln!("Skipping non-UTF8 binary frame: {err}"),
                 },
@@ -287,11 +336,17 @@ impl RocketLeagueWorker {
         }
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "TCP loop needs shared mutable routing/session state references."
+    )]
     async fn run_raw_tcp_session(
         &self,
         shutdown: &CancellationToken,
         lanes: &RoutingLanes,
+        sink: &Arc<dyn TelemetrySink + Send + Sync>,
         sequence: &mut u64,
+        last_compaction_seq: &mut u64,
         session_context: &mut SessionContext,
         routing_stats: &mut RoutingStats,
     ) -> Result<(), String> {
@@ -330,10 +385,13 @@ impl RocketLeagueWorker {
                 &mut pending,
                 shutdown,
                 lanes,
+                sink,
                 sequence,
+                last_compaction_seq,
                 session_context,
                 routing_stats,
-            );
+            )
+            .await;
 
             if pending.len() > 512 * 1024 {
                 eprintln!("Dropping oversized undecodable TCP buffer.");
@@ -382,12 +440,18 @@ impl RocketLeagueWorker {
         Ok((host, port))
     }
 
-    fn consume_json_stream(
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Stream parser delegates stateful routing and compaction checks per payload."
+    )]
+    async fn consume_json_stream(
         &self,
         pending: &mut String,
         shutdown: &CancellationToken,
         lanes: &RoutingLanes,
+        sink: &Arc<dyn TelemetrySink + Send + Sync>,
         sequence: &mut u64,
+        last_compaction_seq: &mut u64,
         session_context: &mut SessionContext,
         routing_stats: &mut RoutingStats,
     ) {
@@ -406,10 +470,13 @@ impl RocketLeagueWorker {
                         value,
                         shutdown,
                         lanes,
+                        sink,
                         sequence,
+                        last_compaction_seq,
                         session_context,
                         routing_stats,
-                    );
+                    )
+                    .await;
                     pending.drain(..consumed);
                 }
                 Some(Err(err)) => {
@@ -431,12 +498,18 @@ impl RocketLeagueWorker {
         }
     }
 
-    fn handle_payload(
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Payload handler forwards shared runtime state into value handler."
+    )]
+    async fn handle_payload(
         &self,
         payload: &str,
         shutdown: &CancellationToken,
         lanes: &RoutingLanes,
+        sink: &Arc<dyn TelemetrySink + Send + Sync>,
         sequence: &mut u64,
+        last_compaction_seq: &mut u64,
         session_context: &mut SessionContext,
         routing_stats: &mut RoutingStats,
     ) {
@@ -452,18 +525,27 @@ impl RocketLeagueWorker {
             parsed,
             shutdown,
             lanes,
+            sink,
             sequence,
+            last_compaction_seq,
             session_context,
             routing_stats,
-        );
+        )
+        .await;
     }
 
-    fn handle_value(
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "Value handler requires routing/session/compaction shared mutable state."
+    )]
+    async fn handle_value(
         &self,
         mut parsed: Value,
-        _shutdown: &CancellationToken,
+        shutdown: &CancellationToken,
         lanes: &RoutingLanes,
+        sink: &Arc<dyn TelemetrySink + Send + Sync>,
         sequence: &mut u64,
+        last_compaction_seq: &mut u64,
         session_context: &mut SessionContext,
         routing_stats: &mut RoutingStats,
     ) {
@@ -488,6 +570,8 @@ impl RocketLeagueWorker {
             return;
         }
 
+        let previous_match_id = session_context.active_match_id.clone();
+
         match parsed_event {
             RocketLeagueEvent::GoalReplayStart => session_context.in_replay = true,
             RocketLeagueEvent::GoalReplayEnd => session_context.in_replay = false,
@@ -502,6 +586,31 @@ impl RocketLeagueWorker {
         self.set_last_event(event_name);
         *sequence = sequence.saturating_add(1);
         let class = Self::classify_event(&parsed_event);
+
+        if let Some(reason) = Self::compaction_reason(
+            &parsed_event,
+            previous_match_id.as_str(),
+            session_context.active_match_id.as_str(),
+        ) {
+            if *last_compaction_seq < *sequence
+                && let Err(err) = Self::compact_transient_nodes(
+                    sink,
+                    shutdown,
+                    *sequence,
+                    reason,
+                    previous_match_id.as_str(),
+                    session_context.active_match_id.as_str(),
+                )
+                .await
+            {
+                eprintln!(
+                    "Compaction warning: cleanup failed at seq={} reason={reason:?} previous_match_id={} next_match_id={} error={}",
+                    *sequence, previous_match_id, session_context.active_match_id, err
+                );
+            }
+
+            *last_compaction_seq = *sequence;
+        }
 
         if session_context.in_replay && class == IngestClass::Historical {
             eprintln!(
@@ -521,6 +630,83 @@ impl RocketLeagueWorker {
         };
 
         Self::route_envelope(envelope, lanes, routing_stats);
+    }
+
+    fn compaction_reason(
+        event: &RocketLeagueEvent,
+        previous_match_id: &str,
+        current_match_id: &str,
+    ) -> Option<CompactionReason> {
+        if matches!(event, RocketLeagueEvent::MatchDestroyed) {
+            return Some(CompactionReason::Destroyed);
+        }
+
+        if matches!(event, RocketLeagueEvent::MatchEnded) {
+            return Some(CompactionReason::Ended);
+        }
+
+        if !previous_match_id.is_empty()
+            && !current_match_id.is_empty()
+            && previous_match_id != current_match_id
+        {
+            return Some(CompactionReason::IdTransition);
+        }
+
+        None
+    }
+
+    async fn compact_transient_nodes(
+        sink: &Arc<dyn TelemetrySink + Send + Sync>,
+        shutdown: &CancellationToken,
+        seq: u64,
+        reason: CompactionReason,
+        previous_match_id: &str,
+        current_match_id: &str,
+    ) -> Result<(), SinkError> {
+        for target in COMPACTION_TARGETS {
+            let mut failures = 0_u32;
+            loop {
+                if shutdown.is_cancelled() {
+                    return Ok(());
+                }
+
+                match sink.delete_node(target).await {
+                    Ok(()) => {
+                        eprintln!(
+                            "Compaction info: deleted node={target} seq={seq} reason={reason:?} previous_match_id={previous_match_id} next_match_id={current_match_id}"
+                        );
+                        break;
+                    }
+                    Err(terminal_error @ SinkError::Terminal { .. }) => {
+                        return Err(terminal_error);
+                    }
+                    Err(
+                        retryable_error @ (SinkError::RateLimited { .. }
+                        | SinkError::TransientNetwork { .. }),
+                    ) => {
+                        failures = failures.saturating_add(1);
+                        if failures > COMPACTION_MAX_FAILURES {
+                            return Err(retryable_error);
+                        }
+
+                        let delay = actors::calculate_full_jitter_backoff(failures);
+                        eprintln!(
+                            "Compaction warning: retrying node={} seq={} reason={reason:?} failures={} retrying_in_ms={}.",
+                            target,
+                            seq,
+                            failures,
+                            delay.as_millis()
+                        );
+                        tokio::select! {
+                            () = shutdown.cancelled() => return Ok(()),
+                            () = sleep(delay) => {}
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(())
     }
 
     fn route_envelope(
