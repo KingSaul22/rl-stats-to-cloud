@@ -8,6 +8,8 @@ enum ProcessMode {
 }
 
 fn main() {
+    tracing_subscriber::fmt::init();
+
     let mode = parse_mode(std::env::args().skip(1));
 
     if let ProcessMode::Command(command) = mode {

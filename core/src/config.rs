@@ -16,7 +16,7 @@ pub enum ConnectorConfig {
         #[serde(rename = "apiKey", alias = "api_key")]
         api_key: String,
         email: String,
-        #[serde(default)]
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         password: Option<String>,
     },
 }

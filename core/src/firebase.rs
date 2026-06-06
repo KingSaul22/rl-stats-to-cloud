@@ -98,6 +98,13 @@ impl FirebaseConnector {
         })?;
 
         let normalized_path = path.trim_matches('/');
+
+        if normalized_path.is_empty() {
+            return Err(SinkError::terminal(
+                "firebase delete_node requires a non-empty path to prevent root database deletion",
+            ));
+        }
+
         let url = self.build_json_url(normalized_path, &auth_token);
         let redacted_url = Self::redact_url(&url);
 
@@ -369,7 +376,7 @@ mod tests {
     }
 
     #[test]
-    fn from_lane_keeps_goal_scored_on_event_feed_when_lane_is_event_feed() {
+    fn from_lane_maps_event_feed_lane_to_event_feed_route() {
         assert_eq!(
             FirebaseRoute::from_lane(SinkLane::EventFeed),
             FirebaseRoute::EventFeed
@@ -377,7 +384,7 @@ mod tests {
     }
 
     #[test]
-    fn from_lane_keeps_statfeed_event_on_historical_when_lane_is_historical() {
+    fn from_lane_maps_historical_lane_to_historical_route() {
         assert_eq!(
             FirebaseRoute::from_lane(SinkLane::Historical),
             FirebaseRoute::Historical
