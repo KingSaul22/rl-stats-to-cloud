@@ -64,14 +64,74 @@ pub(super) async fn run_live_state_actor(
                 };
 
                 match message {
-                    TransientLaneMessage::Event(envelope) => {
-                        process_live_state_envelope(
-                            &envelope,
-                            &sink,
-                            &mut master_state,
-                            &mut cached_match_id,
-                        )
-                        .await;
+                    TransientLaneMessage::Event(mut latest) => {
+                        loop {
+                            match receiver.try_recv() {
+                                Ok(TransientLaneMessage::Event(newer)) => {
+                                    update_live_state_cache(
+                                        &mut master_state,
+                                        &mut cached_match_id,
+                                        &latest,
+                                    );
+                                    latest = newer;
+                                }
+                                Ok(TransientLaneMessage::Flush { ack }) => {
+                                    let state = update_live_state_cache(
+                                        &mut master_state,
+                                        &mut cached_match_id,
+                                        &latest,
+                                    );
+                                    if let Err(err) = sink
+                                        .send_event_on_lane(
+                                            SinkLane::LiveState,
+                                            &latest.event_type,
+                                            &state,
+                                        )
+                                        .await
+                                    {
+                                        log_sink_failure(SinkLane::LiveState, &latest, &err);
+                                    }
+                                    if ack.send(()).is_err() {
+                                        eprintln!(
+                                            "Live-state flush ack receiver dropped before notification."
+                                        );
+                                    }
+                                    break;
+                                }
+                                Ok(TransientLaneMessage::Snapshot { result }) => {
+                                    let _ = result.send(master_state.clone());
+                                }
+                                Ok(TransientLaneMessage::Reset) => {
+                                    master_state["score"] =
+                                        json!({ "blue": 0, "orange": 0 });
+                                    master_state["player_telemetry"] = json!({});
+                                    master_state["has_winner"] = json!(false);
+                                    master_state["winner"] = json!("");
+                                    master_state["is_overtime"] = json!(false);
+                                }
+                                Err(mpsc::error::TryRecvError::Empty) => {
+                                    let state = update_live_state_cache(
+                                        &mut master_state,
+                                        &mut cached_match_id,
+                                        &latest,
+                                    );
+                                    if let Err(err) = sink
+                                        .send_event_on_lane(
+                                            SinkLane::LiveState,
+                                            &latest.event_type,
+                                            &state,
+                                        )
+                                        .await
+                                    {
+                                        log_sink_failure(SinkLane::LiveState, &latest, &err);
+                                    }
+                                    break;
+                                }
+                                Err(mpsc::error::TryRecvError::Disconnected) => {
+                                    break;
+                                }
+                            }
+                        }
                     }
                     TransientLaneMessage::Flush { ack } => {
                         if ack.send(()).is_err() {
@@ -91,22 +151,6 @@ pub(super) async fn run_live_state_actor(
                 }
             }
         }
-    }
-}
-
-async fn process_live_state_envelope(
-    envelope: &IngestEnvelope,
-    sink: &Arc<dyn TelemetrySink + Send + Sync>,
-    master_state: &mut Value,
-    cached_match_id: &mut Option<String>,
-) {
-    let payload_to_send = update_live_state_cache(master_state, cached_match_id, envelope);
-
-    if let Err(err) = sink
-        .send_event_on_lane(SinkLane::LiveState, &envelope.event_type, &payload_to_send)
-        .await
-    {
-        log_sink_failure(SinkLane::LiveState, envelope, &err);
     }
 }
 
