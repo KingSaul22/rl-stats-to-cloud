@@ -29,13 +29,15 @@ pub async fn save_config(
 ) -> Result<(), String> {
     let password_to_forward = match &new_config.connector {
         rl_stats_core::config::ConnectorConfig::Firebase { password, .. } => {
-            password.clone().unwrap_or_default()
+            password.clone().filter(|pw| !pw.is_empty())
         }
     };
 
-    request_provide_password(password_to_forward)
-        .await
-        .map_err(|err| format!("failed to forward password to daemon: {err}"))?;
+    if let Some(pw) = password_to_forward
+        && let Err(err) = request_provide_password(pw).await
+    {
+        eprintln!("warning: failed to forward password to daemon: {err}");
+    }
 
     let mut config_to_persist = new_config.clone();
     if !config_to_persist.remember_password {
