@@ -9,9 +9,9 @@ use std::time::Duration;
 use tokio::io::AsyncReadExt;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc::error::TrySendError;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
-use tokio::time::sleep;
+use tokio::time::{sleep, timeout};
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_util::sync::CancellationToken;
@@ -27,9 +27,11 @@ use actors::{run_event_feed_actor, run_historical_actor, run_live_state_actor};
 use transformer::normalize_payload;
 
 pub use context::SessionContext;
+use events::TransientLaneMessage;
 pub use events::{IngestClass, IngestEnvelope, RocketLeagueEvent};
 
 type TcpTarget = (String, u16);
+const LIVE_STATE_CAPACITY: usize = 2_048;
 const EVENT_FEED_CAPACITY: usize = 2_048;
 const HISTORICAL_CAPACITY: usize = 8_192;
 const RETRY_BACKOFF_BASE_SECONDS: u64 = 1;
@@ -37,6 +39,7 @@ const RETRY_BACKOFF_MAX_SECONDS: u64 = 32;
 const EVENT_FEED_MAX_FAILURES: u32 = 3;
 const COMPACTION_MAX_FAILURES: u32 = 3;
 const COMPACTION_TARGETS: [&str; 2] = ["live_state", "live_events_feed"];
+const COMPACTION_FLUSH_TIMEOUT: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CompactionReason {
@@ -47,15 +50,16 @@ enum CompactionReason {
 
 #[derive(Clone)]
 struct RoutingLanes {
-    live_state: watch::Sender<IngestEnvelope>,
-    event_feed: mpsc::Sender<IngestEnvelope>,
+    live_state: mpsc::Sender<TransientLaneMessage>,
+    event_feed: mpsc::Sender<TransientLaneMessage>,
     historical: mpsc::Sender<IngestEnvelope>,
 }
 
 #[derive(Default)]
 struct RoutingStats {
-    dropped_event_feed_count: u64,
-    dropped_historical_count: u64,
+    live_state_drops: u64,
+    event_feed_losses: u64,
+    historical_overflows: u64,
 }
 
 #[derive(Clone)]
@@ -90,7 +94,7 @@ impl RocketLeagueWorker {
         let sink = self.sink_receiver.borrow().clone();
         let mut session_context = SessionContext::new(None, None);
 
-        let (live_state_sender, live_state_receiver) = watch::channel(IngestEnvelope::bootstrap());
+        let (live_state_sender, live_state_receiver) = mpsc::channel(LIVE_STATE_CAPACITY);
         let (event_feed_sender, event_feed_receiver) = mpsc::channel(EVENT_FEED_CAPACITY);
         let (historical_sender, historical_receiver) = mpsc::channel(HISTORICAL_CAPACITY);
         let lanes = RoutingLanes {
@@ -592,8 +596,10 @@ impl RocketLeagueWorker {
             previous_match_id.as_str(),
             session_context.active_match_id.as_str(),
         ) {
-            if *last_compaction_seq < *sequence
-                && let Err(err) = Self::compact_transient_nodes(
+            if *last_compaction_seq < *sequence {
+                Self::flush_transient_lanes(lanes, shutdown, *sequence, reason).await;
+
+                if let Err(err) = Self::compact_transient_nodes(
                     sink,
                     shutdown,
                     *sequence,
@@ -602,11 +608,12 @@ impl RocketLeagueWorker {
                     session_context.active_match_id.as_str(),
                 )
                 .await
-            {
-                eprintln!(
-                    "Compaction warning: cleanup failed at seq={} reason={reason:?} previous_match_id={} next_match_id={} error={}",
-                    *sequence, previous_match_id, session_context.active_match_id, err
-                );
+                {
+                    eprintln!(
+                        "Compaction warning: cleanup failed at seq={} reason={reason:?} previous_match_id={} next_match_id={} error={}",
+                        *sequence, previous_match_id, session_context.active_match_id, err
+                    );
+                }
             }
 
             *last_compaction_seq = *sequence;
@@ -709,6 +716,103 @@ impl RocketLeagueWorker {
         Ok(())
     }
 
+    async fn flush_transient_lanes(
+        lanes: &RoutingLanes,
+        shutdown: &CancellationToken,
+        seq: u64,
+        reason: CompactionReason,
+    ) {
+        let (live_ack_sender, live_ack_receiver) = oneshot::channel();
+        let live_flush_sent = Self::send_flush_request(
+            "live_state",
+            &lanes.live_state,
+            live_ack_sender,
+            shutdown,
+            seq,
+            reason,
+        )
+        .await;
+
+        let (event_ack_sender, event_ack_receiver) = oneshot::channel();
+        let event_flush_sent = Self::send_flush_request(
+            "event_feed",
+            &lanes.event_feed,
+            event_ack_sender,
+            shutdown,
+            seq,
+            reason,
+        )
+        .await;
+
+        if live_flush_sent {
+            Self::wait_for_flush_ack("live_state", live_ack_receiver, shutdown, seq, reason).await;
+        }
+
+        if event_flush_sent {
+            Self::wait_for_flush_ack("event_feed", event_ack_receiver, shutdown, seq, reason).await;
+        }
+    }
+
+    async fn send_flush_request(
+        lane_name: &str,
+        lane_sender: &mpsc::Sender<TransientLaneMessage>,
+        ack: oneshot::Sender<()>,
+        shutdown: &CancellationToken,
+        seq: u64,
+        reason: CompactionReason,
+    ) -> bool {
+        tokio::select! {
+            () = shutdown.cancelled() => false,
+            send_result = timeout(
+                COMPACTION_FLUSH_TIMEOUT,
+                lane_sender.send(TransientLaneMessage::Flush { ack }),
+            ) => {
+                match send_result {
+                    Ok(Ok(())) => true,
+                    Ok(Err(_)) => {
+                        eprintln!(
+                            "Compaction warning: failed to enqueue flush on lane={lane_name} seq={seq} reason={reason:?} because lane is closed."
+                        );
+                        false
+                    }
+                    Err(_) => {
+                        eprintln!(
+                            "Compaction warning: timeout while enqueueing flush on lane={lane_name} seq={seq} reason={reason:?}. Proceeding with cleanup."
+                        );
+                        false
+                    }
+                }
+            }
+        }
+    }
+
+    async fn wait_for_flush_ack(
+        lane_name: &str,
+        ack: oneshot::Receiver<()>,
+        shutdown: &CancellationToken,
+        seq: u64,
+        reason: CompactionReason,
+    ) {
+        tokio::select! {
+            () = shutdown.cancelled() => {}
+            ack_result = timeout(COMPACTION_FLUSH_TIMEOUT, ack) => {
+                match ack_result {
+                    Ok(Ok(())) => {}
+                    Ok(Err(_)) => {
+                        eprintln!(
+                            "Compaction warning: flush ack sender dropped for lane={lane_name} seq={seq} reason={reason:?}. Proceeding with cleanup."
+                        );
+                    }
+                    Err(_) => {
+                        eprintln!(
+                            "Compaction warning: timeout waiting flush ack on lane={lane_name} seq={seq} reason={reason:?}. Proceeding with cleanup."
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     fn route_envelope(
         envelope: IngestEnvelope,
         lanes: &RoutingLanes,
@@ -716,33 +820,67 @@ impl RocketLeagueWorker {
     ) {
         match envelope.class {
             IngestClass::LiveState => {
-                let _ = lanes.live_state.send_replace(envelope);
+                let sequence = envelope.seq;
+                let event_type = envelope.event_type.clone();
+                match lanes
+                    .live_state
+                    .try_send(TransientLaneMessage::Event(envelope))
+                {
+                    Ok(()) => {}
+                    Err(TrySendError::Full(_)) => {
+                        routing_stats.live_state_drops =
+                            routing_stats.live_state_drops.saturating_add(1);
+                        warn!(
+                            "Live-state lane is full (backpressure). Dropping live-state payload to preserve ingestion flow (dropped_total={}, seq={}, event={}).",
+                            routing_stats.live_state_drops, sequence, event_type
+                        );
+                    }
+                    Err(TrySendError::Closed(_)) => {
+                        error!(
+                            "Live-state lane is closed. Dropping live-state payload (seq={}, event={}).",
+                            sequence, event_type
+                        );
+                    }
+                }
             }
-            IngestClass::EventFeed => match lanes.event_feed.try_send(envelope) {
+            IngestClass::EventFeed => match lanes
+                .event_feed
+                .try_send(TransientLaneMessage::Event(envelope))
+            {
                 Ok(()) => {}
-                Err(TrySendError::Full(dropped)) => {
-                    routing_stats.dropped_event_feed_count =
-                        routing_stats.dropped_event_feed_count.saturating_add(1);
-                    warn!(
-                        "Event feed lane is full (backpressure). Dropping event feed payload to prevent ingestion stall (dropped_total={}, seq={}, event={}).",
-                        routing_stats.dropped_event_feed_count, dropped.seq, dropped.event_type
-                    );
-                }
-                Err(TrySendError::Closed(dropped)) => {
-                    error!(
-                        "Event feed lane is closed. Dropping event feed payload (seq={}, event={}).",
-                        dropped.seq, dropped.event_type
-                    );
-                }
+                Err(TrySendError::Full(message)) => match message {
+                    TransientLaneMessage::Event(dropped) => {
+                        routing_stats.event_feed_losses =
+                            routing_stats.event_feed_losses.saturating_add(1);
+                        warn!(
+                            "Event feed lane is full (backpressure). Dropping event feed payload to prevent ingestion stall (dropped_total={}, seq={}, event={}).",
+                            routing_stats.event_feed_losses, dropped.seq, dropped.event_type
+                        );
+                    }
+                    TransientLaneMessage::Flush { .. } => {
+                        warn!("Unexpected flush control message observed in event-feed fast path.");
+                    }
+                },
+                Err(TrySendError::Closed(message)) => match message {
+                    TransientLaneMessage::Event(dropped) => {
+                        error!(
+                            "Event feed lane is closed. Dropping event feed payload (seq={}, event={}).",
+                            dropped.seq, dropped.event_type
+                        );
+                    }
+                    TransientLaneMessage::Flush { .. } => {
+                        warn!("Unexpected flush control message observed in event-feed fast path.");
+                    }
+                },
             },
             IngestClass::Historical => match lanes.historical.try_send(envelope) {
                 Ok(()) => {}
                 Err(TrySendError::Full(dropped)) => {
-                    routing_stats.dropped_historical_count =
-                        routing_stats.dropped_historical_count.saturating_add(1);
+                    routing_stats.historical_overflows =
+                        routing_stats.historical_overflows.saturating_add(1);
                     warn!(
                         "Historical lane is full (backpressure). Dropping historical event to prevent ingestion stall! (dropped_total={}, seq={}, event={}).",
-                        routing_stats.dropped_historical_count, dropped.seq, dropped.event_type
+                        routing_stats.historical_overflows, dropped.seq, dropped.event_type
                     );
                 }
                 Err(TrySendError::Closed(dropped)) => {

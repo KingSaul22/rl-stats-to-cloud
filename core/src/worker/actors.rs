@@ -1,10 +1,10 @@
-use super::events::IngestEnvelope;
+use super::events::{IngestEnvelope, TransientLaneMessage};
 use super::{EVENT_FEED_MAX_FAILURES, RETRY_BACKOFF_BASE_SECONDS, RETRY_BACKOFF_MAX_SECONDS};
 use crate::connector::{SinkError, TelemetrySink};
 use serde_json::{Map, Value};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tokio::sync::{mpsc, watch};
+use tokio::sync::mpsc;
 use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 
@@ -49,58 +49,86 @@ fn update_live_state_cache(
 }
 
 pub(super) async fn run_live_state_actor(
-    mut receiver: watch::Receiver<IngestEnvelope>,
+    mut receiver: mpsc::Receiver<TransientLaneMessage>,
     sink: Arc<dyn TelemetrySink + Send + Sync>,
     shutdown: CancellationToken,
 ) {
-    let mut last_sent_seq = 0_u64;
     let mut master_state = Value::Object(Map::new());
     let mut cached_match_id = None;
     loop {
         tokio::select! {
             () = shutdown.cancelled() => break,
-            changed = receiver.changed() => {
-                if changed.is_err() {
+            maybe_message = receiver.recv() => {
+                let Some(message) = maybe_message else {
                     break;
-                }
+                };
 
-                let envelope = receiver.borrow_and_update().clone();
-                if envelope.seq <= last_sent_seq {
-                    continue;
-                }
-                last_sent_seq = envelope.seq;
-
-                let payload_to_send =
-                    update_live_state_cache(&mut master_state, &mut cached_match_id, &envelope);
-
-                if let Err(err) = sink.send_event(&envelope.event_type, &payload_to_send).await {
-                    log_sink_failure("live_state", &envelope, &err);
+                match message {
+                    TransientLaneMessage::Event(envelope) => {
+                        process_live_state_envelope(
+                            &envelope,
+                            &sink,
+                            &mut master_state,
+                            &mut cached_match_id,
+                        )
+                        .await;
+                    }
+                    TransientLaneMessage::Flush { ack } => {
+                        if ack.send(()).is_err() {
+                            eprintln!("Live-state flush ack receiver dropped before notification.");
+                        }
+                    }
                 }
             }
         }
     }
 }
 
+async fn process_live_state_envelope(
+    envelope: &IngestEnvelope,
+    sink: &Arc<dyn TelemetrySink + Send + Sync>,
+    master_state: &mut Value,
+    cached_match_id: &mut Option<String>,
+) {
+    let payload_to_send = update_live_state_cache(master_state, cached_match_id, envelope);
+
+    if let Err(err) = sink
+        .send_event(&envelope.event_type, &payload_to_send)
+        .await
+    {
+        log_sink_failure("live_state", envelope, &err);
+    }
+}
+
 pub(super) async fn run_event_feed_actor(
-    mut receiver: mpsc::Receiver<IngestEnvelope>,
+    mut receiver: mpsc::Receiver<TransientLaneMessage>,
     sink: Arc<dyn TelemetrySink + Send + Sync>,
     shutdown: CancellationToken,
 ) {
     loop {
         tokio::select! {
             () = shutdown.cancelled() => break,
-            maybe_envelope = receiver.recv() => {
-                let Some(envelope) = maybe_envelope else {
+            maybe_message = receiver.recv() => {
+                let Some(message) = maybe_message else {
                     break;
                 };
 
-                send_with_retry_policy(
-                    "event_feed",
-                    &envelope,
-                    &sink,
-                    &shutdown,
-                    Some(EVENT_FEED_MAX_FAILURES),
-                ).await;
+                match message {
+                    TransientLaneMessage::Event(envelope) => {
+                        send_with_retry_policy(
+                            "event_feed",
+                            &envelope,
+                            &sink,
+                            &shutdown,
+                            Some(EVENT_FEED_MAX_FAILURES),
+                        ).await;
+                    }
+                    TransientLaneMessage::Flush { ack } => {
+                        if ack.send(()).is_err() {
+                            eprintln!("Event-feed flush ack receiver dropped before notification.");
+                        }
+                    }
+                }
             }
         }
     }
