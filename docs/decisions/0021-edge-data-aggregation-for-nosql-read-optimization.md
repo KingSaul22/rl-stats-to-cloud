@@ -96,7 +96,7 @@ The `put_node` method on the `EventSink` trait (mirrored on `FirebaseConnector`)
 ```
 
 ### Ghost Match Filtering
-Match transitions triggered by `IdTransition` (ADR 0019) can fire when BakkesMod transitions from a pre-match lobby to the actual match — the fallback session ID changes to the real GUID, but the `live_state` actor has never received player telemetry for the lobby. Before invoking the concurrent upload, the router checks whether the snapshot's `player_telemetry` object is non-empty. Ghost matches with zero players are silently skipped; no `matches_index` or `player_match_logs` entries are created.
+Match transitions triggered by `IdTransition` (ADR 0019) can fire when the game transitions from a pre-match lobby to the actual match — the fallback session ID changes to the real GUID, but the `live_state` actor has never received player telemetry for the lobby. Before invoking the concurrent upload, the router checks whether the snapshot's `player_telemetry` object is non-empty. Ghost matches with zero players are silently skipped; no `matches_index` or `player_match_logs` entries are created.
 
 ### Retry Policy and Failure Mode
 Each per-path upload carries an independent retry budget of 3 attempts (`AGGREGATION_MAX_FAILURES`), using the same full-jitter exponential backoff algorithm as the historical lane (ADR 0008). Terminal failures (`4xx` client errors) abort immediately. Rate-limited and transient failures retry up to the budget, then log and discard. Per ADR 0012, aggregation upload failures are fail-soft: a failed `put_node` for one player's log does not prevent other players' logs or the match index from being uploaded, nor does it block the downstream compaction `DELETE`.
