@@ -1,8 +1,6 @@
 Folder PATH listing
 Volume serial number is 841B-4F7E
 C:\USERS\SAUL\SOURCE\REPOS\TFG\RL-STATS-TO-CLOUD-RUST
-|   .gitignore
-|   AGENTS.md
 |   bun.lock
 |   Cargo.lock
 |   Cargo.toml
@@ -10,25 +8,8 @@ C:\USERS\SAUL\SOURCE\REPOS\TFG\RL-STATS-TO-CLOUD-RUST
 |   index.html
 |   package.json
 |   README.md
-|   skills-lock.json
-|   tree.output
 |   tsconfig.json
 |   vite.config.ts
-|   
-+---.agents
-|
-+---.githooks
-|       pre-commit
-|
-+---.github
-|   \---workflows
-|           ci.yaml
-|           release.yaml
-|           security.yaml
-|           
-+---.vscode
-|       extensions.json
-|       settings.json
 |       
 +---core
 |   |   .gitignore
@@ -56,27 +37,16 @@ C:\USERS\SAUL\SOURCE\REPOS\TFG\RL-STATS-TO-CLOUD-RUST
 |               mod.rs
 |               transformer.rs
 |           
-+---dist
-|   |   favicon.png
-|   |   index.html
-|   |   
-|   \---assets
-|           index-xxxxxxx.js
-|           index-yyyyyyy.css
-|           
 +---docs
 |   |   architecture.md
 |   |   development.md
 |   |   firebase-base-schema.json
 |   |   firebase-base-schema_v2.json
-|   |   future
-|   |   future2
 |   |   operations.md
 |   |   pipeline.md
 |   |   
 |   +---assets
 |   +---decisions
-|           0001-three-lane-pipeline.md
 |       
 +---public
 |       favicon.png
@@ -87,11 +57,7 @@ C:\USERS\SAUL\SOURCE\REPOS\TFG\RL-STATS-TO-CLOUD-RUST
 +---src
 |   |   api.ts
 |   |   constants.ts
-|   |   fixe1.md
-|   |   fixe2.md
-|   |   fixe3.md
 |   |   main.ts
-|   |   main.ts.backup
 |   |   schemas.ts
 |   |   styles.css
 |   |   ui.ts
@@ -114,31 +80,8 @@ C:\USERS\SAUL\SOURCE\REPOS\TFG\RL-STATS-TO-CLOUD-RUST
 |   |   
 |   +---capabilities
 |   |       default.json
-|   |       
-|   +---gen
-|   |   \---schemas
-|   |           acl-manifests.json
-|   |           capabilities.json
-|   |           desktop-schema.json
-|   |           windows-schema.json
 |   |           
 |   +---icons
-|   |       128x128.png
-|   |       128x128@2x.png
-|   |       32x32.png
-|   |       icon.icns
-|   |       icon.ico
-|   |       icon.png
-|   |       Square107x107Logo.png
-|   |       Square142x142Logo.png
-|   |       Square150x150Logo.png
-|   |       Square284x284Logo.png
-|   |       Square30x30Logo.png
-|   |       Square310x310Logo.png
-|   |       Square44x44Logo.png
-|   |       Square71x71Logo.png
-|   |       Square89x89Logo.png
-|   |       StoreLogo.png
 |   |       
 |   +---src
 |   |   |   lib.rs
