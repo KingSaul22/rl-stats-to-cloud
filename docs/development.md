@@ -16,7 +16,9 @@
 │   │   ├── lib.rs              Public API re-exports
 │   │   ├── config.rs           AppConfig, ConfigManager, config path
 │   │   ├── connector.rs        EventSink trait, NullSink, connector factory
+│   │   ├── models.rs           MatchIndexEntry, PlayerMatchLog, Cumulative*Stats, PlayerRegistryEntry
 │   │   ├── firebase.rs         FirebaseConnector (HTTP sink)
+│   │   ├── firebase_auth.rs    Firebase REST authentication (token exchange)
 │   │   ├── daemon/
 │   │   │   ├── mod.rs          DaemonSupervisor, run_daemon orchestration
 │   │   │   ├── control.rs      IPC Control Server (TCP listener)
@@ -24,11 +26,12 @@
 │   │   │   ├── protocol.rs     ControlCommand / ControlReply enums
 │   │   │   └── ui_server.rs    WebSocket UI Sync Server
 │   │   └── worker/
-│   │       ├── mod.rs           Ingestion Engine (session loop, reconnection)
-│   │       ├── actors.rs        Sink actor tasks + retry/backoff
-│   │       ├── events.rs        RocketLeagueEvent, IngestEnvelope
-│   │       ├── context.rs       SessionContext (match/session ID tracking)
-│   │       └── transformer.rs   Payload normalization (camelCase/snake_case)
+│   │       ├── mod.rs           Ingestion Engine (session loop, reconnection, compaction, routing)
+│   │       ├── actors.rs        Sink actor tasks + retry/backoff + live-state coalescing
+│   │       ├── aggregation.rs   Match finalization, majority-rule roster resolution, cumulative stats
+│   │       ├── events.rs        RocketLeagueEvent, IngestClass, IngestEnvelope
+│   │       ├── context.rs       SessionContext (match/session ID tracking, replay detection)
+│   │       └── transformer.rs   Payload normalization (camelCase/snake_case) + stat extraction
 │   └── Cargo.toml
 ├── src-tauri/                   rl-stats-to-cloud (Tauri client)
 │   ├── src/
@@ -49,6 +52,8 @@
 │   ├── schemas.ts                Zod schemas + normalization functions
 │   ├── constants.ts              Command names, UI constants
 │   └── styles.css                Application styles (dark theme)
+├── scripts/
+│   └── check-no-sync-socket-async.sh   CI guardrail: forbid blocking socket APIs in async paths
 ├── index.html                    SPA shell
 ├── vite.config.ts                Vite 6 dev server config
 ├── tsconfig.json                 TypeScript 6 strict config
@@ -85,6 +90,33 @@ bun run tsc
 # Frontend build (production)
 bun run build
 ```
+
+### Blocking Socket Guardrail (`check-no-sync-socket-async.sh`)
+
+This script prevents accidental introduction of synchronous blocking I/O inside async
+runtime paths. It scans the following directories with `ripgrep`:
+
+| Search Root | Purpose |
+|-------------|---------|
+| `core/src/daemon` | Daemon supervisor, control server |
+| `core/src/worker` | Ingestion engine, sink actors, aggregation |
+| `src-tauri/src/bridge` | Tauri IPC transport and UI sync |
+
+**Blocked patterns:**
+- `std::net::TcpListener` / `std::net::TcpStream` (use `tokio::net` equivalents)
+- `std::io::BufReader` / `std::io::BufRead` (use `tokio::io` equivalents)
+- Any `use std::net::{...}` or `use std::io::{...}` import blocks containing those types
+
+**Exclusion:** `core/src/daemon/client.rs` is exempt — it is an intentionally synchronous
+IPC client for short-lived CLI processes that do not share the async runtime.
+
+The script uses exit codes for CI integration:
+
+| Exit Code | Meaning |
+|-----------|---------|
+| 0 | Clean: no blocking APIs found |
+| 1 | Violation found: blocking APIs detected; CI must fail |
+| 2 | Tooling error: missing `rg` or repository root check |
 
 ## Linting Policy
 
