@@ -133,3 +133,9 @@ IPC client at `core/src/daemon/client.rs`, which is intentionally blocking).
 
 Failing this check (exit code 1) blocks the CI pipeline. See
 [Validation Commands](development.md#validation-commands) for integration.
+
+## Process Lifecycle & Deterministic Teardown
+
+To ensure system stability and prevent memory leaks, both the Rust Daemon and the Tauri Desktop Client implement strict shutdown sequences. 
+
+Specifically, the Tauri UI enforces a **Deterministic Teardown Deadline** on its background network bridge. When the user closes the desktop window, the application allows background tasks exactly `2.0 seconds` to gracefully flush pending IPC commands to the daemon. If a network socket hangs or the daemon is unresponsive, the background `JoinHandle` is explicitly aborted (`.abort()`). This guarantees that the UI never leaves "zombie processes" running in the host operating system's background.
