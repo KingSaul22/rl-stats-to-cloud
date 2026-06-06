@@ -1,0 +1,22 @@
+use serde::Serialize;
+
+#[derive(Debug, Serialize)]
+pub struct MatchIndexEntry {
+    pub timestamp: u64,
+    pub blue_score: u64,
+    pub orange_score: u64,
+    pub match_id: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PlayerMatchLog {
+    pub timestamp: u64,
+    pub goals: u64,
+    pub shots: u64,
+    pub saves: u64,
+    pub assists: u64,
+    pub score: i64,
+    pub touches: u64,
+    pub demos: u64,
+    pub match_id: String,
+}

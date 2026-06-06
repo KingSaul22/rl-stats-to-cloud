@@ -121,6 +121,42 @@ impl FirebaseConnector {
         Ok(())
     }
 
+    /// Puts a JSON node in Firebase Realtime Database.
+    ///
+    /// # Errors
+    /// Returns an error when authentication fails, the request cannot be sent,
+    /// or Firebase returns a non-success status code.
+    pub async fn put_node(&self, path: &str, data: &Value) -> Result<(), SinkError> {
+        let auth_token = self.auth.get_token().await.map_err(|err| {
+            let message = format!("firebase auth token retrieval failed: {err}");
+            eprintln!("Firebase put warning: {message}");
+            SinkError::transient(message)
+        })?;
+
+        let normalized_path = path.trim_matches('/');
+        let url = self.build_json_url(normalized_path, &auth_token);
+        let redacted_url = Self::redact_url(&url);
+
+        let response = self.http.put(&url).json(data).send().await.map_err(|err| {
+            let mapped = Self::map_reqwest_error(&err);
+            let err_message = Self::redact_message(&err.to_string());
+            eprintln!("Firebase put warning: failed to send to {redacted_url} ({err_message})");
+            mapped
+        })?;
+
+        if !response.status().is_success() {
+            let mapped = Self::map_status_error(response.status(), &redacted_url);
+            eprintln!(
+                "Firebase put warning: {} returned status {}",
+                redacted_url,
+                response.status()
+            );
+            return Err(mapped);
+        }
+
+        Ok(())
+    }
+
     fn build_json_url(&self, endpoint_path: &str, auth_token: &str) -> String {
         format!("{}/{}.json?auth={auth_token}", self.base_url, endpoint_path)
     }
@@ -187,6 +223,10 @@ impl EventSink for FirebaseConnector {
 
     async fn delete_node(&self, path: &str) -> Result<(), SinkError> {
         Self::delete_node(self, path).await
+    }
+
+    async fn put_node(&self, path: &str, data: &Value) -> Result<(), SinkError> {
+        Self::put_node(self, path, data).await
     }
 }
 

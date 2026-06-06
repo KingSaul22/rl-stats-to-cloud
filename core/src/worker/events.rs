@@ -87,6 +87,7 @@ pub struct IngestEnvelope {
 pub enum TransientLaneMessage {
     Event(IngestEnvelope),
     Flush { ack: oneshot::Sender<()> },
+    Snapshot { result: oneshot::Sender<Value> },
 }
 
 #[cfg(test)]

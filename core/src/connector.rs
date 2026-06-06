@@ -97,6 +97,17 @@ pub trait EventSink: Send + Sync {
             "sink does not support delete_node for path '{path}'"
         )))
     }
+
+    /// Puts a JSON node to a connector path when supported by the backend sink.
+    ///
+    /// # Errors
+    /// Returns an error when the sink cannot perform puts or when the
+    /// underlying connector request fails.
+    async fn put_node(&self, path: &str, _data: &Value) -> Result<(), SinkError> {
+        Err(SinkError::terminal(format!(
+            "sink does not support put_node for path '{path}'"
+        )))
+    }
 }
 pub use EventSink as TelemetrySink;
 
@@ -122,6 +133,10 @@ impl EventSink for NullSink {
     }
 
     async fn delete_node(&self, _path: &str) -> Result<(), SinkError> {
+        Ok(())
+    }
+
+    async fn put_node(&self, _path: &str, _data: &Value) -> Result<(), SinkError> {
         Ok(())
     }
 }
