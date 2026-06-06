@@ -16,7 +16,8 @@ pub enum ConnectorConfig {
         #[serde(rename = "apiKey", alias = "api_key")]
         api_key: String,
         email: String,
-        password: String,
+        #[serde(default)]
+        password: Option<String>,
     },
 }
 
@@ -26,7 +27,7 @@ impl Default for ConnectorConfig {
             url: "https://your-project.firebaseio.com".to_string(),
             api_key: "your-firebase-web-api-key".to_string(),
             email: "firebase-user@example.com".to_string(),
-            password: "replace-with-secure-password".to_string(),
+            password: None,
         }
     }
 }
@@ -44,6 +45,8 @@ pub struct AppConfig {
     pub reconnect_delay_seconds: u64,
     #[serde(default = "default_ui_sync_port", alias = "ui_sync_port")]
     pub ui_sync_port: u16,
+    #[serde(default, alias = "remember_password")]
+    pub remember_password: bool,
 }
 
 impl Default for AppConfig {
@@ -54,7 +57,26 @@ impl Default for AppConfig {
             connector: ConnectorConfig::default(),
             reconnect_delay_seconds: 5,
             ui_sync_port: default_ui_sync_port(),
+            remember_password: false,
         }
+    }
+}
+
+impl AppConfig {
+    #[must_use]
+    pub fn sanitized_for_storage(&self) -> Self {
+        if self.remember_password {
+            return self.clone();
+        }
+
+        let mut sanitized = self.clone();
+        match &mut sanitized.connector {
+            ConnectorConfig::Firebase { password, .. } => {
+                *password = None;
+            }
+        }
+
+        sanitized
     }
 }
 
@@ -117,7 +139,8 @@ impl ConfigManager {
             fs::create_dir_all(parent)?;
         }
 
-        let json = serde_json::to_string_pretty(config)?;
+        let sanitized = config.sanitized_for_storage();
+        let json = serde_json::to_string_pretty(&sanitized)?;
         fs::write(&self.path, json)?;
         Ok(())
     }
@@ -178,6 +201,7 @@ mod tests {
         let config: AppConfig = serde_json::from_str(legacy_json)?;
 
         assert_eq!(config.ui_sync_port, default_ui_sync_port());
+        assert!(!config.remember_password);
         Ok(())
     }
 
@@ -200,6 +224,53 @@ mod tests {
         let config: AppConfig = serde_json::from_str(json)?;
 
         assert_eq!(config.ui_sync_port, 60000);
+        assert!(!config.remember_password);
         Ok(())
+    }
+
+    #[test]
+    fn app_config_deserializes_with_missing_password() -> Result<(), JsonError> {
+        let json = r#"{
+            "is_headless": false,
+            "websocket_url": "ws://127.0.0.1:49123",
+            "connector": {
+                "type": "Firebase",
+                "url": "https://your-project.firebaseio.com",
+                "api_key": "test-api-key",
+                "email": "firebase-user@example.com"
+            },
+            "reconnect_delay_seconds": 5,
+            "ui_sync_port": 54321,
+            "remember_password": false
+        }"#;
+
+        let config: AppConfig = serde_json::from_str(json)?;
+        match config.connector {
+            super::ConnectorConfig::Firebase { password, .. } => {
+                assert_eq!(password, None);
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn sanitized_for_storage_removes_password_when_not_remembered() {
+        let config = AppConfig {
+            remember_password: false,
+            connector: super::ConnectorConfig::Firebase {
+                url: "https://your-project.firebaseio.com".to_string(),
+                api_key: "test-api-key".to_string(),
+                email: "firebase-user@example.com".to_string(),
+                password: Some("secret".to_string()),
+            },
+            ..AppConfig::default()
+        };
+
+        let sanitized = config.sanitized_for_storage();
+        match sanitized.connector {
+            super::ConnectorConfig::Firebase { password, .. } => {
+                assert_eq!(password, None);
+            }
+        }
     }
 }

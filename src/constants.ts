@@ -45,6 +45,7 @@ export const CONSTANTS = {
     CONNECTOR_API_KEY: "#connector-api-key",
     CONNECTOR_EMAIL: "#connector-email",
     CONNECTOR_PASSWORD: "#connector-password",
+    REMEMBER_PASSWORD: "#remember-password",
     RECONNECT_DELAY: "#reconnect-delay-seconds",
     SHUTDOWN_BUTTON: "#shutdown-daemon",
     OFFLINE_CONFIG_BUTTON: "#offline-config-btn",

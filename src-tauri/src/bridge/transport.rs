@@ -11,12 +11,13 @@ use tokio_util::sync::CancellationToken;
 pub(super) const CONTROL_ENDPOINT: &str = "127.0.0.1:43210";
 pub(super) const CONTROL_IO_TIMEOUT_SECONDS: u64 = 3;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub(super) enum ControlCommand {
     AllowUi,
     DisallowUi,
     Poweroff,
+    ProvidePassword(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -99,6 +100,13 @@ pub(super) async fn send_control_command(command: ControlCommand) -> ControlRepl
 
 pub(super) async fn request_poweroff() -> Result<(), String> {
     match send_control_command(ControlCommand::Poweroff).await {
+        ControlReply::Ok { .. } => Ok(()),
+        ControlReply::NotRunning { message } | ControlReply::Error { message } => Err(message),
+    }
+}
+
+pub(super) async fn request_provide_password(password: String) -> Result<(), String> {
+    match send_control_command(ControlCommand::ProvidePassword(password)).await {
         ControlReply::Ok { .. } => Ok(()),
         ControlReply::NotRunning { message } | ControlReply::Error { message } => Err(message),
     }

@@ -28,6 +28,7 @@ const DEFAULT_CONFIG: AppConfig = {
     email: "",
     password: "",
   },
+  rememberPassword: false,
   reconnectDelaySeconds: CONSTANTS.DEFAULT_DELAYS.RECONNECT,
   isHeadless: false,
   websocketUrl: "ws://localhost:1420",

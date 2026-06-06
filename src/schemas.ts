@@ -28,6 +28,8 @@ export const RawAppConfigSchema = z
     websocketUrl: z.string().optional(),
     ui_sync_port: z.number().optional(),
     uiSyncPort: z.number().optional(),
+    remember_password: z.boolean().optional(),
+    rememberPassword: z.boolean().optional(),
   })
   .loose();
 
@@ -52,6 +54,7 @@ export type AppConfig = {
     email: string;
     password: string;
   };
+  rememberPassword: boolean;
   reconnectDelaySeconds: number;
   isHeadless: boolean;
   websocketUrl: string;
@@ -116,6 +119,8 @@ export function normalizeAppConfig(raw: unknown): AppConfig {
     validated.websocketUrl ?? validated.websocket_url ?? "ws://localhost:1420";
   const uiSyncPort = 
     validated.uiSyncPort ?? validated.ui_sync_port ?? 54321;
+  const rememberPassword =
+    validated.rememberPassword ?? validated.remember_password ?? false;
 
   return {
     connector: {
@@ -125,6 +130,7 @@ export function normalizeAppConfig(raw: unknown): AppConfig {
       email: connectorEmail,
       password: connectorPassword,
     },
+    rememberPassword,
     reconnectDelaySeconds: reconnectDelay ?? CONSTANTS.DEFAULT_DELAYS.RECONNECT,
     isHeadless,
     websocketUrl,

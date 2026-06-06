@@ -21,6 +21,13 @@ pub struct TokenState {
     pub expires_at: SystemTime,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuthRuntimeState {
+    MissingCredentials,
+    Unauthenticated,
+    Authenticated,
+}
+
 impl Default for TokenState {
     fn default() -> Self {
         Self {
@@ -35,14 +42,15 @@ impl Default for TokenState {
 pub struct FirebaseAuth {
     api_key: String,
     email: String,
-    password: String,
+    password: Arc<RwLock<Option<String>>>,
     http: Client,
     state: Arc<RwLock<TokenState>>,
+    runtime_state: Arc<RwLock<AuthRuntimeState>>,
 }
 
 impl FirebaseAuth {
     #[must_use]
-    pub fn new(api_key: String, email: String, password: String) -> Self {
+    pub fn new(api_key: String, email: String, password: Option<String>) -> Self {
         let http = match Client::builder().timeout(Duration::from_secs(5)).build() {
             Ok(client) => client,
             Err(err) => {
@@ -53,13 +61,48 @@ impl FirebaseAuth {
             }
         };
 
+        let normalized_password = normalize_password(password);
+        let runtime_state = if normalized_password.is_some() {
+            AuthRuntimeState::Unauthenticated
+        } else {
+            AuthRuntimeState::MissingCredentials
+        };
+
         Self {
             api_key,
             email,
-            password,
+            password: Arc::new(RwLock::new(normalized_password)),
             http,
             state: Arc::new(RwLock::new(TokenState::default())),
+            runtime_state: Arc::new(RwLock::new(runtime_state)),
         }
+    }
+
+    /// Update the in-memory password and immediately attempt authentication.
+    ///
+    /// # Errors
+    /// Returns an error if provided credentials are empty or rejected by Firebase.
+    pub async fn update_credentials(&self, password: String) -> Result<(), AuthError> {
+        {
+            let mut password_guard = self.password.write().await;
+            *password_guard = normalize_password(Some(password));
+        }
+
+        {
+            let mut state = self.state.write().await;
+            *state = TokenState::default();
+        }
+
+        {
+            let mut runtime_state = self.runtime_state.write().await;
+            *runtime_state = AuthRuntimeState::Unauthenticated;
+        }
+
+        self.login().await
+    }
+
+    pub async fn runtime_state(&self) -> AuthRuntimeState {
+        *self.runtime_state.read().await
     }
 
     /// Authenticate with Firebase Identity Toolkit and cache ID/refresh tokens.
@@ -67,10 +110,22 @@ impl FirebaseAuth {
     /// # Errors
     /// Returns an error if the HTTP request fails, Firebase rejects credentials, or response payload is invalid.
     pub async fn login(&self) -> Result<(), AuthError> {
+        let password = {
+            let password_guard = self.password.read().await;
+            if let Some(password) = password_guard.clone() {
+                password
+            } else {
+                let mut runtime_state = self.runtime_state.write().await;
+                *runtime_state = AuthRuntimeState::MissingCredentials;
+                drop(runtime_state);
+                return Err(AuthError::MissingCredentials);
+            }
+        };
+
         let url = format!("{LOGIN_ENDPOINT}?key={}", self.api_key);
         let payload = SignInRequest {
             email: self.email.clone(),
-            password: self.password.clone(),
+            password,
             return_secure_token: true,
         };
 
@@ -100,6 +155,10 @@ impl FirebaseAuth {
         state.refresh_token = parsed.refresh_token;
         state.expires_at = expires_at;
         drop(state);
+
+        let mut runtime_state = self.runtime_state.write().await;
+        *runtime_state = AuthRuntimeState::Authenticated;
+        drop(runtime_state);
         Ok(())
     }
 
@@ -119,6 +178,9 @@ impl FirebaseAuth {
 
         let state = self.state.read().await;
         if state.id_token.is_empty() {
+            let mut runtime_state = self.runtime_state.write().await;
+            *runtime_state = AuthRuntimeState::Unauthenticated;
+            drop(runtime_state);
             return Err(AuthError::MissingTokenState);
         }
 
@@ -126,6 +188,13 @@ impl FirebaseAuth {
     }
 
     async fn refresh_token(&self) -> Result<(), AuthError> {
+        if self.password.read().await.is_none() {
+            let mut runtime_state = self.runtime_state.write().await;
+            *runtime_state = AuthRuntimeState::MissingCredentials;
+            drop(runtime_state);
+            return Err(AuthError::MissingCredentials);
+        }
+
         let existing_refresh_token = {
             let state = self.state.read().await;
             state.refresh_token.clone()
@@ -168,6 +237,10 @@ impl FirebaseAuth {
         state.refresh_token = parsed.refresh_token;
         state.expires_at = expires_at;
         drop(state);
+
+        let mut runtime_state = self.runtime_state.write().await;
+        *runtime_state = AuthRuntimeState::Authenticated;
+        drop(runtime_state);
         Ok(())
     }
 }
@@ -178,6 +251,7 @@ pub enum AuthError {
     HttpStatus { status: StatusCode, body: String },
     ParseExpiresIn(std::num::ParseIntError),
     MissingTokenState,
+    MissingCredentials,
 }
 
 impl fmt::Display for AuthError {
@@ -189,6 +263,9 @@ impl fmt::Display for AuthError {
             }
             Self::ParseExpiresIn(err) => write!(f, "invalid expires_in from firebase auth: {err}"),
             Self::MissingTokenState => write!(f, "firebase auth token state is missing"),
+            Self::MissingCredentials => {
+                write!(f, "firebase auth is missing credentials")
+            }
         }
     }
 }
@@ -198,7 +275,7 @@ impl Error for AuthError {
         match self {
             Self::Request(err) => Some(err),
             Self::ParseExpiresIn(err) => Some(err),
-            Self::HttpStatus { .. } | Self::MissingTokenState => None,
+            Self::HttpStatus { .. } | Self::MissingTokenState | Self::MissingCredentials => None,
         }
     }
 }
@@ -248,6 +325,16 @@ fn token_needs_refresh(expires_at: SystemTime) -> bool {
 
 fn redact_error_body(body: &str) -> String {
     body.to_string()
+}
+
+fn normalize_password(password: Option<String>) -> Option<String> {
+    password.and_then(|value| {
+        if value.trim().is_empty() {
+            None
+        } else {
+            Some(value)
+        }
+    })
 }
 
 #[cfg(test)]
