@@ -15,7 +15,7 @@ use tokio::time::{sleep, timeout};
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_util::sync::CancellationToken;
-use tracing::{error, warn};
+use tracing::warn;
 use url::Url;
 
 mod actors;
@@ -339,7 +339,7 @@ impl RocketLeagueWorker {
                         session_context,
                         routing_stats,
                     )
-                    .await;
+                    .await?;
                 }
                 Message::Binary(bytes) => match String::from_utf8(bytes.clone()) {
                     Ok(text) => {
@@ -357,7 +357,7 @@ impl RocketLeagueWorker {
                             session_context,
                             routing_stats,
                         )
-                        .await;
+                        .await?;
                     }
                     Err(err) => eprintln!("Skipping non-UTF8 binary frame: {err}"),
                 },
@@ -441,7 +441,7 @@ impl RocketLeagueWorker {
                 session_context,
                 routing_stats,
             )
-            .await;
+            .await?;
 
             if pending.len() > 512 * 1024 {
                 eprintln!("Dropping oversized undecodable TCP buffer.");
@@ -508,7 +508,7 @@ impl RocketLeagueWorker {
         cached_historical_active: &mut bool,
         session_context: &mut SessionContext,
         routing_stats: &mut RoutingStats,
-    ) {
+    ) -> Result<(), String> {
         loop {
             let mut stream = serde_json::Deserializer::from_str(pending).into_iter::<Value>();
             let item = stream.next();
@@ -534,7 +534,7 @@ impl RocketLeagueWorker {
                         session_context,
                         routing_stats,
                     )
-                    .await;
+                    .await?;
                     pending.drain(..consumed);
                 }
                 Some(Err(err)) => {
@@ -554,6 +554,7 @@ impl RocketLeagueWorker {
                 None => break,
             }
         }
+        Ok(())
     }
 
     #[expect(
@@ -574,12 +575,12 @@ impl RocketLeagueWorker {
         cached_historical_active: &mut bool,
         session_context: &mut SessionContext,
         routing_stats: &mut RoutingStats,
-    ) {
+    ) -> Result<(), String> {
         let parsed: Value = match serde_json::from_str(payload) {
             Ok(value) => value,
             Err(err) => {
                 eprintln!("Skipping invalid JSON payload: {err}");
-                return;
+                return Ok(());
             }
         };
 
@@ -597,7 +598,7 @@ impl RocketLeagueWorker {
             session_context,
             routing_stats,
         )
-        .await;
+        .await
     }
 
     #[expect(
@@ -622,12 +623,12 @@ impl RocketLeagueWorker {
         cached_historical_active: &mut bool,
         session_context: &mut SessionContext,
         routing_stats: &mut RoutingStats,
-    ) {
+    ) -> Result<(), String> {
         Self::unwrap_double_encoded_data(&mut parsed);
 
         let Some(event_name) = parsed.get("Event").and_then(Value::as_str) else {
             println!("Received JSON without Event field.");
-            return;
+            return Ok(());
         };
         let parsed_event = match serde_json::from_value::<RocketLeagueEvent>(Value::String(
             event_name.to_string(),
@@ -641,7 +642,7 @@ impl RocketLeagueWorker {
 
         if event_name.is_empty() {
             println!("Received JSON with empty Event field.");
-            return;
+            return Ok(());
         }
 
         let previous_match_id = session_context.active_match_id.clone();
@@ -731,7 +732,7 @@ impl RocketLeagueWorker {
                 "Skipping historical event '{}' (seq={}) due to active replay.",
                 event_name, *sequence
             );
-            return;
+            return Ok(());
         }
 
         let payload = normalize_payload(class, &parsed, event_name, session_context);
@@ -750,7 +751,7 @@ impl RocketLeagueWorker {
             *cached_game_seconds_remaining,
             *cached_podium_active,
             *cached_historical_active,
-        );
+        )
     }
 
     fn compaction_reason(
@@ -965,11 +966,13 @@ impl RocketLeagueWorker {
         cached_game_seconds_remaining: Option<u64>,
         podium_active: bool,
         historical_active: bool,
-    ) {
+    ) -> Result<(), String> {
         let should_mirror = Self::is_high_value_historical_event(envelope.event_type.as_str());
 
         match envelope.class {
-            IngestClass::LiveState => Self::try_send_live_state(envelope, lanes, routing_stats),
+            IngestClass::LiveState => {
+                Self::try_send_live_state(envelope, lanes, routing_stats)
+            }
             IngestClass::EventFeed => {
                 let is_lifecycle = Self::is_lifecycle_event(envelope.event_type.as_str());
                 let is_match_initialized = envelope.event_type.as_str() == "MatchInitialized";
@@ -977,13 +980,14 @@ impl RocketLeagueWorker {
                     should_mirror || (is_lifecycle && historical_active) || is_match_initialized;
                 let historical_copy = should_send_to_historical.then(|| envelope.clone());
                 if !is_lifecycle && !podium_active {
-                    Self::try_send_event_feed(envelope, lanes, routing_stats);
+                    Self::try_send_event_feed(envelope, lanes, routing_stats)?;
                 }
                 if let Some(copy) = historical_copy {
                     let enriched =
                         Self::enrich_historical_timing(copy, cached_game_seconds_remaining);
-                    Self::try_send_historical(enriched, lanes, routing_stats);
+                    Self::try_send_historical(enriched, lanes, routing_stats)?;
                 }
+                Ok(())
             }
             IngestClass::Historical => {
                 let is_lifecycle = Self::is_lifecycle_event(envelope.event_type.as_str());
@@ -992,10 +996,11 @@ impl RocketLeagueWorker {
                     .flatten();
                 let enriched =
                     Self::enrich_historical_timing(envelope, cached_game_seconds_remaining);
-                Self::try_send_historical(enriched, lanes, routing_stats);
+                Self::try_send_historical(enriched, lanes, routing_stats)?;
                 if let Some(copy) = event_feed_copy {
-                    Self::try_send_event_feed(copy, lanes, routing_stats);
+                    Self::try_send_event_feed(copy, lanes, routing_stats)?;
                 }
+                Ok(())
             }
         }
     }
@@ -1028,7 +1033,7 @@ impl RocketLeagueWorker {
         envelope: IngestEnvelope,
         lanes: &RoutingLanes,
         routing_stats: &mut RoutingStats,
-    ) {
+    ) -> Result<(), String> {
         let sequence = envelope.seq;
         let event_type = envelope.event_type.clone();
 
@@ -1036,19 +1041,19 @@ impl RocketLeagueWorker {
             .live_state
             .try_send(TransientLaneMessage::Event(envelope))
         {
-            Ok(()) => {}
+            Ok(()) => Ok(()),
             Err(TrySendError::Full(_)) => {
                 routing_stats.live_state_drops = routing_stats.live_state_drops.saturating_add(1);
                 warn!(
                     "Live-state lane is full (backpressure). Dropping live-state payload to preserve ingestion flow (dropped_total={}, seq={}, event={}).",
                     routing_stats.live_state_drops, sequence, event_type
                 );
+                Ok(())
             }
             Err(TrySendError::Closed(_)) => {
-                error!(
-                    "Live-state lane is closed. Dropping live-state payload (seq={}, event={}).",
-                    sequence, event_type
-                );
+                Err(format!(
+                    "Live-state lane is closed. Cannot send live-state payload (seq={sequence}, event={event_type})."
+                ))
             }
         }
     }
@@ -1057,12 +1062,12 @@ impl RocketLeagueWorker {
         envelope: IngestEnvelope,
         lanes: &RoutingLanes,
         routing_stats: &mut RoutingStats,
-    ) {
+    ) -> Result<(), String> {
         match lanes
             .event_feed
             .try_send(TransientLaneMessage::Event(envelope))
         {
-            Ok(()) => {}
+            Ok(()) => Ok(()),
             Err(TrySendError::Full(message)) => match message {
                 TransientLaneMessage::Event(dropped) => {
                     routing_stats.event_feed_losses =
@@ -1071,34 +1076,13 @@ impl RocketLeagueWorker {
                         "Event feed lane is full (backpressure). Dropping event feed payload to prevent ingestion stall (dropped_total={}, seq={}, event={}).",
                         routing_stats.event_feed_losses, dropped.seq, dropped.event_type
                     );
+                    Ok(())
                 }
-                TransientLaneMessage::Flush { .. } => {
-                    warn!("Unexpected flush control message observed in event-feed fast path.");
-                }
-                TransientLaneMessage::Snapshot { .. } => {
-                    warn!("Unexpected snapshot control message observed in event-feed fast path.");
-                }
-                TransientLaneMessage::Reset => {
-                    warn!("Unexpected reset control message observed in event-feed fast path.");
-                }
+                _ => Ok(()),
             },
-            Err(TrySendError::Closed(message)) => match message {
-                TransientLaneMessage::Event(dropped) => {
-                    error!(
-                        "Event feed lane is closed. Dropping event feed payload (seq={}, event={}).",
-                        dropped.seq, dropped.event_type
-                    );
-                }
-                TransientLaneMessage::Flush { .. } => {
-                    warn!("Unexpected flush control message observed in event-feed fast path.");
-                }
-                TransientLaneMessage::Snapshot { .. } => {
-                    warn!("Unexpected snapshot control message observed in event-feed fast path.");
-                }
-                TransientLaneMessage::Reset => {
-                    warn!("Unexpected reset control message observed in event-feed fast path.");
-                }
-            },
+            Err(TrySendError::Closed(_)) => {
+                Err("Event feed lane actor channel closed unexpectedly.".to_string())
+            }
         }
     }
 
@@ -1106,9 +1090,9 @@ impl RocketLeagueWorker {
         envelope: IngestEnvelope,
         lanes: &RoutingLanes,
         routing_stats: &mut RoutingStats,
-    ) {
+    ) -> Result<(), String> {
         match lanes.historical.try_send(envelope) {
-            Ok(()) => {}
+            Ok(()) => Ok(()),
             Err(TrySendError::Full(dropped)) => {
                 routing_stats.historical_overflows =
                     routing_stats.historical_overflows.saturating_add(1);
@@ -1116,12 +1100,13 @@ impl RocketLeagueWorker {
                     "Historical lane is full (backpressure). Dropping historical event to prevent ingestion stall! (dropped_total={}, seq={}, event={}).",
                     routing_stats.historical_overflows, dropped.seq, dropped.event_type
                 );
+                Ok(())
             }
             Err(TrySendError::Closed(dropped)) => {
-                error!(
-                    "Historical lane is closed. Dropping historical payload (seq={}, event={}).",
+                Err(format!(
+                    "Historical lane actor channel closed unexpectedly (seq={}, event={}).",
                     dropped.seq, dropped.event_type
-                );
+                ))
             }
         }
     }
@@ -1432,7 +1417,7 @@ mod tests {
             active_match_id: "match_1".to_string(),
         };
 
-        RocketLeagueWorker::route_envelope(
+        let _ = RocketLeagueWorker::route_envelope(
             envelope,
             &lanes,
             &mut routing_stats,
@@ -1482,7 +1467,7 @@ mod tests {
             active_match_id: "match_1".to_string(),
         };
 
-        RocketLeagueWorker::route_envelope(
+        let _ = RocketLeagueWorker::route_envelope(
             envelope,
             &lanes,
             &mut routing_stats,
