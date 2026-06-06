@@ -1,3 +1,0 @@
-Fase E (Pruebas de Verificación): Dejar que Copilot genere la suite de pruebas unitarias para validar los fallos (fallbacks) de unknown_match, el mapeo de rutas y la inmutabilidad de los payloads estructurados.
-
-Sanear el Plano de Control (daemon.rs): Atacar el segundo gran riesgo crítico remanente que detectó la auditoría general: eliminar las lecturas bloqueantes síncronas (BufReader::read_line) en los hilos asíncronos de Tokio para evitar la congelación de la interfaz de usuario de Tauri.
