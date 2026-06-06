@@ -75,10 +75,28 @@ impl EventSink for NullSink {
 }
 
 #[must_use]
-pub fn connector_factory(config: &ConnectorConfig) -> Arc<dyn EventSink + Send + Sync> {
+pub async fn connector_factory(config: &ConnectorConfig) -> Arc<dyn EventSink + Send + Sync> {
     match config {
-        ConnectorConfig::Firebase { url, auth_token } => {
-            Arc::new(FirebaseConnector::new(url.clone(), auth_token.clone()))
+        ConnectorConfig::Firebase {
+            url,
+            api_key,
+            email,
+            password,
+        } => match FirebaseConnector::new(
+            url.clone(),
+            api_key.clone(),
+            email.clone(),
+            password.clone(),
+        )
+        .await
+        {
+            Ok(connector) => Arc::new(connector),
+            Err(err) => {
+                eprintln!(
+                    "Firebase connector warning: failed to initialize auth session ({err}). Falling back to null sink."
+                );
+                Arc::new(NullSink)
+            }
         }
     }
 }

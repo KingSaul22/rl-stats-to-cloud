@@ -114,10 +114,11 @@ the protocol and falls back from WebSocket to TCP if the initial HTTP handshake 
   "isHeadless": false,
   "websocketUrl": "ws://127.0.0.1:49123",
   "connector": {
-    "Firebase": {
-      "url": "https://<project>.firebaseio.com",
-      "authToken": "<secret>"
-    }
+    "type": "Firebase",
+    "url": "https://<project>.firebaseio.com",
+    "apiKey": "<firebase-web-api-key>",
+    "email": "<firebase-user-email>",
+    "password": "<firebase-user-password>"
   },
   "reconnectDelaySeconds": 5,
   "uiSyncPort": 54321
@@ -129,6 +130,8 @@ the protocol and falls back from WebSocket to TCP if the initial HTTP handshake 
 | `isHeadless` | `bool` | `false` | Suppress UI Sync Server entirely |
 | `websocketUrl` | `string` | `"ws://127.0.0.1:49123"` | Telemetry source endpoint |
 | `connector.Firebase.url` | `string` | — | Firebase Realtime Database URL |
-| `connector.Firebase.authToken` | `string` | — | Firebase auth secret |
+| `connector.Firebase.apiKey` | `string` | — | Firebase Web API key for REST auth |
+| `connector.Firebase.email` | `string` | — | Firebase auth user email |
+| `connector.Firebase.password` | `string` | — | Firebase auth user password |
 | `reconnectDelaySeconds` | `u64` | `5` | Seconds before reconnection attempt |
 | `uiSyncPort` | `u16` | `54321` | Port for the UI Sync Server |

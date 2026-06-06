@@ -13,8 +13,10 @@ pub enum ConnectorConfig {
     #[serde(rename = "Firebase")]
     Firebase {
         url: String,
-        #[serde(rename = "authToken", alias = "auth_token")]
-        auth_token: Option<String>,
+        #[serde(rename = "apiKey", alias = "api_key")]
+        api_key: String,
+        email: String,
+        password: String,
     },
 }
 
@@ -22,7 +24,9 @@ impl Default for ConnectorConfig {
     fn default() -> Self {
         Self::Firebase {
             url: "https://your-project.firebaseio.com".to_string(),
-            auth_token: None,
+            api_key: "your-firebase-web-api-key".to_string(),
+            email: "firebase-user@example.com".to_string(),
+            password: "replace-with-secure-password".to_string(),
         }
     }
 }
@@ -164,7 +168,9 @@ mod tests {
             "connector": {
                 "type": "Firebase",
                 "url": "https://your-project.firebaseio.com",
-                "auth_token": null
+                "api_key": "test-api-key",
+                "email": "firebase-user@example.com",
+                "password": "secret"
             },
             "reconnect_delay_seconds": 5
         }"#;
@@ -183,7 +189,9 @@ mod tests {
             "connector": {
                 "type": "Firebase",
                 "url": "https://your-project.firebaseio.com",
-                "auth_token": null
+                "api_key": "test-api-key",
+                "email": "firebase-user@example.com",
+                "password": "secret"
             },
             "reconnect_delay_seconds": 5,
             "ui_sync_port": 60000

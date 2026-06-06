@@ -88,7 +88,7 @@ impl DaemonSupervisor {
             .await;
         });
 
-        let initial_sink = connector_factory(&self.config.connector);
+        let initial_sink = connector_factory(&self.config.connector).await;
         let (_sink_sender, sink_receiver) = tokio::sync::watch::channel(initial_sink);
         let worker = RocketLeagueWorker::from_config(&self.config, state_sender, sink_receiver);
         let worker_shutdown = self.shutdown.clone();
