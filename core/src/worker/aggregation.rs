@@ -966,4 +966,330 @@ mod tests {
         assert_eq!(v["blue_assists"], json!(3));
         assert_eq!(v["blue_demos"], json!(1));
     }
+
+    // ── TestSink: local async mock that implements TelemetrySink ────────────
+
+    use async_trait::async_trait;
+    use std::collections::HashMap;
+    use std::sync::Mutex as StdMutex;
+    use tokio_util::sync::CancellationToken;
+
+    #[derive(Debug, Clone)]
+    struct TestSink {
+        inner: Arc<StdMutex<TestSinkInner>>,
+    }
+
+    #[derive(Debug, Default)]
+    struct TestSinkInner {
+        get_responses: HashMap<String, Result<Option<Value>, SinkError>>,
+        put_calls: Vec<(String, Value)>,
+    }
+
+    impl TestSink {
+        fn new() -> Self {
+            Self {
+                inner: Arc::new(StdMutex::new(TestSinkInner::default())),
+            }
+        }
+
+        fn lock_inner(&self) -> std::sync::MutexGuard<'_, TestSinkInner> {
+            match self.inner.lock() {
+                Ok(guard) => guard,
+                Err(poisoned) => poisoned.into_inner(),
+            }
+        }
+
+        fn set_get_response(&self, path: &str, response: Result<Option<Value>, SinkError>) {
+            let mut inner = self.lock_inner();
+            inner.get_responses.insert(path.to_string(), response);
+        }
+
+        fn set_get_error(&self, path: &str, error: SinkError) {
+            self.set_get_response(path, Err(error));
+        }
+
+        fn set_player_team(&self, player_id: &str, team_id: Option<&str>) {
+            let path = format!("players/{player_id}");
+            let value = team_id.map(|t| json!({"team_id": t}));
+            self.set_get_response(&path, Ok(value));
+        }
+
+        fn put_calls_for_path(&self, path_prefix: &str) -> Vec<(String, Value)> {
+            let inner = self.lock_inner();
+            inner
+                .put_calls
+                .iter()
+                .filter(|(p, _)| p.starts_with(path_prefix))
+                .cloned()
+                .collect()
+        }
+    }
+
+    #[async_trait]
+    impl TelemetrySink for TestSink {
+        async fn send_event(&self, _event_type: &str, _payload: &Value) -> Result<(), SinkError> {
+            Ok(())
+        }
+
+        async fn get_node(&self, path: &str) -> Result<Option<Value>, SinkError> {
+            {
+                let inner = self.lock_inner();
+                if let Some(response) = inner.get_responses.get(path) {
+                    return response.clone();
+                }
+            }
+            Ok(None)
+        }
+
+        async fn put_node(&self, path: &str, data: &Value) -> Result<(), SinkError> {
+            self.lock_inner()
+                .put_calls
+                .push((path.to_string(), data.clone()));
+            Ok(())
+        }
+    }
+
+    // ── P1: Majority Rule & Aggregation Tests ──────────────────────────────
+
+    /// Prove that if registry lookups return `[EG, EG, NRG]`, it resolves to `EG`.
+    #[tokio::test]
+    async fn resolve_team_id_returns_majority_team_for_two_of_three_votes() {
+        let test_sink = Arc::new(TestSink::new());
+        test_sink.set_player_team("Player1", Some("EG"));
+        test_sink.set_player_team("Player2", Some("EG"));
+        test_sink.set_player_team("Player3", Some("NRG"));
+
+        let sink: Arc<dyn TelemetrySink + Send + Sync> = test_sink;
+        let result = resolve_team_id(
+            &sink,
+            &[
+                "Player1".to_string(),
+                "Player2".to_string(),
+                "Player3".to_string(),
+            ],
+            "match_1",
+            "blue",
+            &CancellationToken::new(),
+        )
+        .await;
+
+        assert_eq!(result, "EG");
+    }
+
+    /// Prove that `[EG, None (unregistered), Missing]` resolves to `EG`.
+    #[tokio::test]
+    async fn resolve_team_id_returns_majority_when_unregistered_players_do_not_vote() {
+        let test_sink = Arc::new(TestSink::new());
+        test_sink.set_player_team("Player1", Some("EG"));
+        // Player2: unregistered — team_id=None in registry record
+        test_sink.set_get_response("players/Player2", Ok(Some(json!({}))));
+        // Player3: missing — no registry entry at all (sink returns Ok(None))
+        // (default behaviour for unconfigured paths)
+
+        let sink: Arc<dyn TelemetrySink + Send + Sync> = test_sink;
+        let result = resolve_team_id(
+            &sink,
+            &[
+                "Player1".to_string(),
+                "Player2".to_string(),
+                "Player3".to_string(),
+            ],
+            "match_1",
+            "blue",
+            &CancellationToken::new(),
+        )
+        .await;
+
+        assert_eq!(result, "EG");
+    }
+
+    /// Prove that `[EG, NRG]` results in a fallback like `temp_match_1_blue`.
+    #[tokio::test]
+    async fn resolve_team_id_returns_temp_id_on_tie() {
+        let test_sink = Arc::new(TestSink::new());
+        test_sink.set_player_team("Player1", Some("EG"));
+        test_sink.set_player_team("Player2", Some("NRG"));
+
+        let sink: Arc<dyn TelemetrySink + Send + Sync> = test_sink;
+        let result = resolve_team_id(
+            &sink,
+            &["Player1".to_string(), "Player2".to_string()],
+            "match_1",
+            "blue",
+            &CancellationToken::new(),
+        )
+        .await;
+
+        assert_eq!(result, "temp_match_1_blue");
+    }
+
+    /// Prove an empty player list immediately yields the deterministic temp ID.
+    #[tokio::test]
+    async fn resolve_team_id_returns_temp_id_for_empty_roster() {
+        let test_sink = Arc::new(TestSink::new());
+        let sink: Arc<dyn TelemetrySink + Send + Sync> = test_sink;
+        let result =
+            resolve_team_id(&sink, &[], "match_1", "blue", &CancellationToken::new()).await;
+
+        assert_eq!(result, "temp_match_1_blue");
+    }
+
+    /// Prove that transient/terminal `get_node` errors do not crash resolution
+    /// and simply count as non-votes.
+    #[tokio::test]
+    async fn resolve_team_id_ignores_failed_registry_lookups() {
+        let test_sink = Arc::new(TestSink::new());
+        test_sink.set_get_error("players/Player1", SinkError::transient("network timeout"));
+        test_sink.set_get_error("players/Player2", SinkError::terminal("unauthorized"));
+        test_sink.set_player_team("Player3", Some("EG"));
+
+        let sink: Arc<dyn TelemetrySink + Send + Sync> = test_sink;
+        let result = resolve_team_id(
+            &sink,
+            &[
+                "Player1".to_string(),
+                "Player2".to_string(),
+                "Player3".to_string(),
+            ],
+            "match_1",
+            "blue",
+            &CancellationToken::new(),
+        )
+        .await;
+
+        assert_eq!(result, "EG");
+    }
+
+    /// Verify via `TestSink` interception that the final `put_node` to
+    /// `matches_index/{match_id}` includes the resolved team IDs AND the
+    /// summed denormalized stats (shots, saves, assists, demos) for both sides.
+    #[tokio::test]
+    async fn upload_aggregation_writes_resolved_team_ids_and_team_totals_to_match_index() {
+        let test_sink = Arc::new(TestSink::new());
+
+        // Blue team: Player1 (EG), Player2 (EG)
+        test_sink.set_player_team("Player1", Some("EG"));
+        test_sink.set_player_team("Player2", Some("EG"));
+
+        // Orange team: Player3 (NRG), Player4 (NRG)
+        test_sink.set_player_team("Player3", Some("NRG"));
+        test_sink.set_player_team("Player4", Some("NRG"));
+
+        let state = json!({
+            "score": {"blue": 3, "orange": 2},
+            "player_telemetry": {
+                "Player1": {
+                    "team": 0, "goals": 2, "shots": 5, "saves": 2,
+                    "assists": 1, "score": 450, "touches": 10, "demos": 1
+                },
+                "Player2": {
+                    "team": 0, "goals": 1, "shots": 3, "saves": 3,
+                    "assists": 2, "score": 300, "touches": 8, "demos": 1
+                },
+                "Player3": {
+                    "team": 1, "goals": 1, "shots": 4, "saves": 2,
+                    "assists": 1, "score": 350, "touches": 9, "demos": 2
+                },
+                "Player4": {
+                    "team": 1, "goals": 1, "shots": 2, "saves": 1,
+                    "assists": 0, "score": 250, "touches": 7, "demos": 1
+                }
+            }
+        });
+
+        let shutdown = CancellationToken::new();
+        {
+            let sink_clone = Arc::clone(&test_sink);
+            let sink: Arc<dyn TelemetrySink + Send + Sync> = sink_clone;
+            upload_aggregation(&sink, "match_1", &state, &shutdown).await;
+        }
+
+        let index_calls = test_sink.put_calls_for_path("matches_index/match_1");
+        assert_eq!(
+            index_calls.len(),
+            1,
+            "expected exactly one put to matches_index/match_1"
+        );
+
+        let index_value = &index_calls[0].1;
+
+        assert_eq!(index_value["blue_team_id"], json!("EG"));
+        assert_eq!(index_value["orange_team_id"], json!("NRG"));
+
+        // Blue totals: shots=5+3=8, saves=2+3=5, assists=1+2=3, demos=1+1=2
+        assert_eq!(index_value["blue_shots"], json!(8));
+        assert_eq!(index_value["blue_saves"], json!(5));
+        assert_eq!(index_value["blue_assists"], json!(3));
+        assert_eq!(index_value["blue_demos"], json!(2));
+
+        // Orange totals: shots=4+2=6, saves=2+1=3, assists=1+0=1, demos=2+1=3
+        assert_eq!(index_value["orange_shots"], json!(6));
+        assert_eq!(index_value["orange_saves"], json!(3));
+        assert_eq!(index_value["orange_assists"], json!(1));
+        assert_eq!(index_value["orange_demos"], json!(3));
+    }
+
+    /// Verify that ambiguous teams still successfully write the index and
+    /// cumulative stats under their generated temp IDs.
+    #[tokio::test]
+    async fn upload_aggregation_uses_temp_team_id_when_resolution_is_ambiguous() {
+        let test_sink = Arc::new(TestSink::new());
+
+        // No player registry entries — all get_node calls return Ok(None).
+        // This forces tie/resolution to fall back to temp IDs.
+
+        let state = json!({
+            "score": {"blue": 3, "orange": 2},
+            "player_telemetry": {
+                "Player1": {
+                    "team": 0, "goals": 2, "shots": 5, "saves": 2,
+                    "assists": 1, "score": 450, "touches": 10, "demos": 1
+                },
+                "Player2": {
+                    "team": 0, "goals": 1, "shots": 3, "saves": 0,
+                    "assists": 0, "score": 200, "touches": 5, "demos": 0
+                },
+                "Player3": {
+                    "team": 1, "goals": 1, "shots": 4, "saves": 2,
+                    "assists": 1, "score": 350, "touches": 9, "demos": 2
+                },
+                "Player4": {
+                    "team": 1, "goals": 1, "shots": 2, "saves": 1,
+                    "assists": 0, "score": 250, "touches": 7, "demos": 1
+                }
+            }
+        });
+
+        let shutdown = CancellationToken::new();
+        {
+            let sink_clone = Arc::clone(&test_sink);
+            let sink: Arc<dyn TelemetrySink + Send + Sync> = sink_clone;
+            upload_aggregation(&sink, "match_1", &state, &shutdown).await;
+        }
+
+        let index_calls = test_sink.put_calls_for_path("matches_index/match_1");
+        assert_eq!(index_calls.len(), 1);
+
+        let index_value = &index_calls[0].1;
+
+        assert_eq!(index_value["blue_team_id"], json!("temp_match_1_blue"));
+        assert_eq!(index_value["orange_team_id"], json!("temp_match_1_orange"));
+
+        // Verify cumulative team stats were also written under temp IDs
+        let blue_team_puts =
+            test_sink.put_calls_for_path("stats_cumulative_teams/temp_match_1_blue");
+        assert_eq!(
+            blue_team_puts.len(),
+            1,
+            "expected cumulative team stats for blue temp team"
+        );
+
+        let orange_team_puts =
+            test_sink.put_calls_for_path("stats_cumulative_teams/temp_match_1_orange");
+        assert_eq!(
+            orange_team_puts.len(),
+            1,
+            "expected cumulative team stats for orange temp team"
+        );
+    }
 }
