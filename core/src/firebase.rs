@@ -384,6 +384,14 @@ mod tests {
     }
 
     #[test]
+    fn from_lane_maps_live_state_lane_to_live_state_route() {
+        assert_eq!(
+            FirebaseRoute::from_lane(SinkLane::LiveState),
+            FirebaseRoute::LiveState
+        );
+    }
+
+    #[test]
     fn from_lane_maps_historical_lane_to_historical_route() {
         assert_eq!(
             FirebaseRoute::from_lane(SinkLane::Historical),

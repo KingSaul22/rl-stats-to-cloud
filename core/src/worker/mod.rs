@@ -1539,4 +1539,256 @@ mod tests {
             Some(&Value::from(183_u64))
         );
     }
+
+    #[test]
+    fn route_envelope_sends_live_state_only_to_live_lane() {
+        let (live_state_sender, mut live_state_receiver) = mpsc::channel(1);
+        let (event_feed_sender, mut event_feed_receiver) = mpsc::channel(1);
+        let (historical_sender, mut historical_receiver) = mpsc::channel(1);
+        let lanes = RoutingLanes {
+            live_state: live_state_sender,
+            event_feed: event_feed_sender,
+            historical: historical_sender,
+        };
+
+        let mut routing_stats = RoutingStats::default();
+        let envelope = IngestEnvelope {
+            seq: 1,
+            event_type: "UpdateState".to_string(),
+            payload: json!({}),
+            class: IngestClass::LiveState,
+            active_match_id: "match_1".to_string(),
+        };
+
+        let result = RocketLeagueWorker::route_envelope(
+            envelope,
+            &lanes,
+            &mut routing_stats,
+            None,
+            false,
+            false,
+        );
+
+        assert!(result.is_ok());
+        assert!(live_state_receiver.try_recv().is_ok());
+        assert!(event_feed_receiver.try_recv().is_err());
+        assert!(historical_receiver.try_recv().is_err());
+    }
+
+    #[test]
+    fn route_envelope_sends_regular_event_feed_only_to_event_feed_when_podium_inactive() {
+        let (live_state_sender, mut live_state_receiver) = mpsc::channel(1);
+        let (event_feed_sender, mut event_feed_receiver) = mpsc::channel(1);
+        let (historical_sender, mut historical_receiver) = mpsc::channel(1);
+        let lanes = RoutingLanes {
+            live_state: live_state_sender,
+            event_feed: event_feed_sender,
+            historical: historical_sender,
+        };
+
+        let mut routing_stats = RoutingStats::default();
+        let envelope = IngestEnvelope {
+            seq: 2,
+            event_type: "BallHit".to_string(),
+            payload: json!({}),
+            class: IngestClass::EventFeed,
+            active_match_id: "match_1".to_string(),
+        };
+
+        let result = RocketLeagueWorker::route_envelope(
+            envelope,
+            &lanes,
+            &mut routing_stats,
+            None,
+            false,
+            false,
+        );
+
+        assert!(result.is_ok());
+        assert!(live_state_receiver.try_recv().is_err());
+        assert!(event_feed_receiver.try_recv().is_ok());
+        assert!(historical_receiver.try_recv().is_err());
+    }
+
+    #[test]
+    fn route_envelope_suppresses_regular_event_feed_during_podium() {
+        let (live_state_sender, mut live_state_receiver) = mpsc::channel(1);
+        let (event_feed_sender, mut event_feed_receiver) = mpsc::channel(1);
+        let (historical_sender, mut historical_receiver) = mpsc::channel(1);
+        let lanes = RoutingLanes {
+            live_state: live_state_sender,
+            event_feed: event_feed_sender,
+            historical: historical_sender,
+        };
+
+        let mut routing_stats = RoutingStats::default();
+        let envelope = IngestEnvelope {
+            seq: 3,
+            event_type: "BallHit".to_string(),
+            payload: json!({}),
+            class: IngestClass::EventFeed,
+            active_match_id: "match_1".to_string(),
+        };
+
+        let result = RocketLeagueWorker::route_envelope(
+            envelope,
+            &lanes,
+            &mut routing_stats,
+            None,
+            true,
+            false,
+        );
+
+        assert!(result.is_ok());
+        assert!(live_state_receiver.try_recv().is_err());
+        assert!(event_feed_receiver.try_recv().is_err());
+        assert!(historical_receiver.try_recv().is_err());
+    }
+
+    #[test]
+    fn route_envelope_routes_unknown_historical_event_only_to_historical() {
+        let (live_state_sender, mut live_state_receiver) = mpsc::channel(1);
+        let (event_feed_sender, mut event_feed_receiver) = mpsc::channel(1);
+        let (historical_sender, mut historical_receiver) = mpsc::channel(1);
+        let lanes = RoutingLanes {
+            live_state: live_state_sender,
+            event_feed: event_feed_sender,
+            historical: historical_sender,
+        };
+
+        let mut routing_stats = RoutingStats::default();
+        let envelope = IngestEnvelope {
+            seq: 4,
+            event_type: "SomethingNeverSeen".to_string(),
+            payload: json!({}),
+            class: IngestClass::Historical,
+            active_match_id: "match_1".to_string(),
+        };
+
+        let result = RocketLeagueWorker::route_envelope(
+            envelope,
+            &lanes,
+            &mut routing_stats,
+            None,
+            false,
+            false,
+        );
+
+        assert!(result.is_ok());
+        assert!(live_state_receiver.try_recv().is_err());
+        assert!(event_feed_receiver.try_recv().is_err());
+        assert!(historical_receiver.try_recv().is_ok());
+    }
+
+    #[test]
+    fn route_envelope_routes_match_initialized_to_historical_even_when_historical_inactive() {
+        let (live_state_sender, mut live_state_receiver) = mpsc::channel(1);
+        let (event_feed_sender, _event_feed_receiver) = mpsc::channel(1);
+        let (historical_sender, mut historical_receiver) = mpsc::channel(1);
+        let lanes = RoutingLanes {
+            live_state: live_state_sender,
+            event_feed: event_feed_sender,
+            historical: historical_sender,
+        };
+
+        let mut routing_stats = RoutingStats::default();
+        let envelope = IngestEnvelope {
+            seq: 5,
+            event_type: "MatchInitialized".to_string(),
+            payload: json!({}),
+            class: IngestClass::EventFeed,
+            active_match_id: "match_1".to_string(),
+        };
+
+        let result = RocketLeagueWorker::route_envelope(
+            envelope,
+            &lanes,
+            &mut routing_stats,
+            None,
+            false,
+            false,
+        );
+
+        assert!(result.is_ok());
+        assert!(live_state_receiver.try_recv().is_err());
+        assert!(historical_receiver.try_recv().is_ok());
+    }
+
+    #[test]
+    fn route_envelope_returns_error_when_target_lane_is_closed() {
+        let (live_state_sender, live_state_receiver) = mpsc::channel::<TransientLaneMessage>(1);
+        let (event_feed_sender, _event_feed_receiver) = mpsc::channel(1);
+        let (historical_sender, _historical_receiver) = mpsc::channel(1);
+        drop(live_state_receiver);
+
+        let lanes = RoutingLanes {
+            live_state: live_state_sender,
+            event_feed: event_feed_sender,
+            historical: historical_sender,
+        };
+
+        let mut routing_stats = RoutingStats::default();
+        let envelope = IngestEnvelope {
+            seq: 6,
+            event_type: "UpdateState".to_string(),
+            payload: json!({}),
+            class: IngestClass::LiveState,
+            active_match_id: "match_1".to_string(),
+        };
+
+        let result = RocketLeagueWorker::route_envelope(
+            envelope,
+            &lanes,
+            &mut routing_stats,
+            None,
+            false,
+            false,
+        );
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn route_envelope_increments_drop_stats_when_lanes_are_full() {
+        let (live_state_sender, _live_state_receiver) = mpsc::channel::<TransientLaneMessage>(1);
+        let (event_feed_sender, _event_feed_receiver) = mpsc::channel(1);
+        let (historical_sender, _historical_receiver) = mpsc::channel(1);
+
+        // Fill the live_state lane first
+        let fill_envelope = IngestEnvelope {
+            seq: 100,
+            event_type: "UpdateState".to_string(),
+            payload: json!({}),
+            class: IngestClass::LiveState,
+            active_match_id: "match_1".to_string(),
+        };
+        let _ = live_state_sender.try_send(TransientLaneMessage::Event(fill_envelope));
+
+        let lanes = RoutingLanes {
+            live_state: live_state_sender,
+            event_feed: event_feed_sender,
+            historical: historical_sender,
+        };
+
+        let mut routing_stats = RoutingStats::default();
+        let envelope = IngestEnvelope {
+            seq: 7,
+            event_type: "UpdateState".to_string(),
+            payload: json!({}),
+            class: IngestClass::LiveState,
+            active_match_id: "match_1".to_string(),
+        };
+
+        let result = RocketLeagueWorker::route_envelope(
+            envelope,
+            &lanes,
+            &mut routing_stats,
+            None,
+            false,
+            false,
+        );
+
+        assert!(result.is_ok());
+        assert_eq!(routing_stats.live_state_drops, 1);
+    }
 }

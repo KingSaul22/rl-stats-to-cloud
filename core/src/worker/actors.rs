@@ -336,9 +336,13 @@ pub(super) fn log_sink_failure(lane: SinkLane, envelope: &IngestEnvelope, error:
 
 #[cfg(test)]
 mod tests {
-    use super::{merge_json_value, update_live_state_cache};
+    use super::{
+        calculate_full_jitter_backoff, duration_millis_u64, merge_json_value,
+        sample_uniform_jitter_millis, update_live_state_cache,
+    };
     use crate::worker::events::{IngestClass, IngestEnvelope};
     use serde_json::json;
+    use std::time::Duration;
 
     fn live_envelope(seq: u64, match_id: &str, payload: serde_json::Value) -> IngestEnvelope {
         IngestEnvelope {
@@ -348,6 +352,43 @@ mod tests {
             class: IngestClass::LiveState,
             active_match_id: match_id.to_string(),
         }
+    }
+
+    #[test]
+    fn calculate_full_jitter_backoff_should_never_exceed_attempt_window() {
+        let attempts = [
+            (1_u32, Duration::from_secs(1)),
+            (2, Duration::from_secs(2)),
+            (3, Duration::from_secs(4)),
+            (6, Duration::from_secs(32)),
+            (u32::MAX, Duration::from_secs(32)),
+        ];
+
+        for (attempt, max_window) in attempts {
+            let delay = calculate_full_jitter_backoff(attempt);
+
+            assert!(
+                delay <= max_window,
+                "attempt {attempt} produced {delay:?}, exceeding {max_window:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn calculate_full_jitter_backoff_should_handle_zero_failures() {
+        let delay = calculate_full_jitter_backoff(0);
+
+        assert!(delay <= Duration::from_secs(1));
+    }
+
+    #[test]
+    fn sample_uniform_jitter_millis_should_return_zero_for_zero_window() {
+        assert_eq!(sample_uniform_jitter_millis(0), 0);
+    }
+
+    #[test]
+    fn duration_millis_u64_should_saturate_large_durations() {
+        assert_eq!(duration_millis_u64(Duration::from_secs(u64::MAX)), u64::MAX);
     }
 
     #[test]
