@@ -364,9 +364,38 @@ fn normalize_password(password: Option<String>) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{REFRESH_MARGIN, token_needs_refresh};
+    use super::{REFRESH_MARGIN, compute_expires_at, token_needs_refresh};
     use std::time::Duration;
     use std::time::SystemTime;
+
+    #[test]
+    fn compute_expires_at_should_add_requested_duration_with_tolerance() {
+        let requested = Duration::from_mins(1);
+        let before = SystemTime::now();
+        let expires_at = compute_expires_at(60);
+        let after = SystemTime::now();
+
+        assert!(expires_at >= before + requested && expires_at <= after + requested);
+    }
+
+    #[test]
+    fn compute_expires_at_should_fallback_when_duration_overflows() {
+        let before = SystemTime::now();
+        let expires_at = compute_expires_at(u64::MAX);
+        let after = SystemTime::now();
+
+        assert!(
+            expires_at >= before + Duration::from_secs(3_599)
+                && expires_at <= after + Duration::from_secs(3_601)
+        );
+    }
+
+    #[test]
+    fn compute_expires_at_zero_seconds_should_need_refresh() {
+        let expires_at = compute_expires_at(0);
+
+        assert!(token_needs_refresh(expires_at));
+    }
 
     #[test]
     fn token_needs_refresh_when_already_expired() {
